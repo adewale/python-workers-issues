@@ -1,0 +1,15 @@
+[project]
+name = "python-r2-binary"
+version = "0.1.0"
+description = "Python R2 binary data example — demonstrates the to_js(bytes) .slice() fix"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "webtypy>=0.1.7",
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk"
+]

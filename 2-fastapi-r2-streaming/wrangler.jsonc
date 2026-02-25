@@ -1,0 +1,19 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "fastapi-r2-streaming",
+	"main": "src/worker.py",
+	"compatibility_date": "2025-11-02",
+	"compatibility_flags": [
+		"python_workers",
+		"python_dedicated_snapshot"
+	],
+	"r2_buckets": [
+		{
+			"binding": "BUCKET",
+			"bucket_name": "r2-streaming-example"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}
