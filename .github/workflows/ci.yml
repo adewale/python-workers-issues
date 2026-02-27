@@ -24,7 +24,7 @@ jobs:
     - name: Install dependencies
       run: |
         uv sync --dev
-        cd 1-r2-binary && uv run pywrangler dev --help
+        cd 2-fastapi-r2-streaming && uv run pywrangler dev --help
 
     - name: Run tests
       run: uv run pytest -vv

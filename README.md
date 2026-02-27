@@ -5,14 +5,14 @@ Self-contained reproductions of [Python Workers](https://developers.cloudflare.c
 ## Get started
 
 1. `git clone https://github.com/cloudflare/python-workers-issues`
-2. `cd` into an issue directory (e.g. `cd 1-r2-binary`)
+2. `cd` into an issue directory (e.g. `cd 2-fastapi-r2-streaming`)
 3. `uv run pywrangler dev`
 4. Press the `b` key to open a browser tab and make a request to the Worker
 
 ## Issues
 
-- [**`1-r2-binary/`**](1-r2-binary) — `to_js(bytes)` creates a Wasm memory *view*, not a copy. If the Wasm heap grows during an async R2 write, the `ArrayBuffer` detaches and data is silently truncated. **Fix:** call `.slice()` after `to_js()`.
 - [**`2-fastapi-r2-streaming/`**](2-fastapi-r2-streaming) — The Workers ASGI adapter only consumes the first yielded chunk from `StreamingResponse` async generators, silently truncating R2 content larger than ~4 KB. **Workaround:** read the full body and return a plain `Response`.
+- [**`3-httpx-headers/`**](3-httpx-headers) — The pywrangler-bundled httpx replaces httpcore with a `jsfetch.py` transport that strips the `User-Agent` header to avoid browser CORS preflights. Workers aren't browsers — this causes 403s from APIs like GitHub that require `User-Agent`. **Workaround:** use `js.fetch()` directly.
 
 ## Open Beta and Limits
 

@@ -1,10 +1,11 @@
 [project]
-name = "python-r2-binary"
+name = "python-httpx-headers"
 version = "0.1.0"
-description = "Python R2 binary data example — demonstrates the to_js(bytes) .slice() fix"
+description = "Python Workers bug: httpx silently drops outbound HTTP request headers in Pyodide/workerd"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.0",
     "webtypy>=0.1.7",
 ]
 

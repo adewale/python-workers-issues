@@ -36,7 +36,7 @@ def pywrangler_dev_server(directory: str):
     # Wait for server to be ready
     ready = False
     timeout = 30
-    if "CI" in os.environ and directory.startswith("1-"):
+    if "CI" in os.environ and directory.startswith("2-"):
         # Starting the server the first time takes a really long time in CI.
         timeout = 300
 

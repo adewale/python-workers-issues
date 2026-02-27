@@ -1,16 +1,6 @@
 import requests
 
 
-def test_1_r2_binary(dev_server):
-    port = dev_server
-    response = requests.get(f"http://localhost:{port}/store")
-    assert response.status_code == 200
-    result = response.json()
-    assert result["original_size"] == 65536  # 64KB
-    assert result["stored_size"] == 65536
-    assert result["data_matches"] is True
-
-
 def test_2_fastapi_r2_streaming(dev_server):
     port = dev_server
 
@@ -43,3 +33,22 @@ def test_2_fastapi_r2_streaming(dev_server):
     compare = compare_resp.json()
     assert compare["full_body_size"] == 131072
     assert compare["chunk_count"] > 1
+
+
+def test_3_httpx_headers(dev_server):
+    port = dev_server
+    response = requests.get(f"http://localhost:{port}/test")
+    assert response.status_code == 200
+    result = response.json()
+
+    # httpx should be missing User-Agent due to jsfetch.py HEADERS_TO_IGNORE
+    httpx_headers = result["httpx_received"]
+    assert "User-Agent" not in httpx_headers, (
+        "httpx preserved User-Agent — the jsfetch.py bug may be fixed!"
+    )
+    assert httpx_headers.get("X-Custom") == "preserved"
+
+    # js.fetch() should preserve both headers
+    jsfetch_headers = result["jsfetch_received"]
+    assert jsfetch_headers.get("User-Agent") == "repro/1.0"
+    assert jsfetch_headers.get("X-Custom") == "preserved"
