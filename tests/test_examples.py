@@ -52,3 +52,28 @@ def test_3_httpx_headers(dev_server):
     jsfetch_headers = result["jsfetch_received"]
     assert jsfetch_headers.get("User-Agent") == "repro/1.0"
     assert jsfetch_headers.get("X-Custom") == "preserved"
+
+
+def test_4_r2_large_binary_roundtrip(dev_server):
+    port = dev_server
+
+    # Seed a large binary (50MB)
+    seed_resp = requests.post(f"http://localhost:{port}/seed?size_mb=50")
+    assert seed_resp.status_code == 200
+    key = seed_resp.json()["key"]
+
+    # Fixed path should work — R2 ReadableStream bypasses Python
+    fixed_resp = requests.get(f"http://localhost:{port}/fixed/{key}")
+    assert fixed_resp.status_code == 200
+    fixed_size = len(fixed_resp.content)
+
+    # Broken path should crash or truncate for large binaries
+    try:
+        broken_resp = requests.get(f"http://localhost:{port}/broken/{key}", timeout=30)
+        broken_size = len(broken_resp.content)
+        assert broken_size < fixed_size or broken_resp.status_code >= 500, (
+            f"Expected broken path to fail for 50MB, but got {broken_size} bytes. "
+            f"The Pyodide FFI large binary bug may be fixed!"
+        )
+    except requests.exceptions.ConnectionError:
+        pass  # Worker crashed — expected behavior

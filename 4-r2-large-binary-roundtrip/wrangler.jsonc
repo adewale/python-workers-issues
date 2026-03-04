@@ -1,0 +1,19 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "r2-large-binary-roundtrip",
+	"main": "src/entry.py",
+	"compatibility_date": "2025-11-02",
+	"compatibility_flags": [
+		"python_workers",
+		"python_dedicated_snapshot"
+	],
+	"r2_buckets": [
+		{
+			"binding": "BUCKET",
+			"bucket_name": "test-large-binary"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}
