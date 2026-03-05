@@ -11,18 +11,20 @@ The Workers ASGI adapter only consumes the **first** yielded chunk from an async
 ```
    R2 ReadableStream          Python async generator       ASGI adapter
   ┌──────────────────┐       ┌──────────────────────┐     ┌─────────────┐
-  │ chunk 1 (64KB) ──┼──→────│ yield chunk 1    ────┼──→──│ ✓ consumed  │
-  │ chunk 2 (64KB) ──┼──→────│ yield chunk 2    ────┼──→──│ ✗ DROPPED   │
-  │ chunk 3 (64KB) ──┼──→────│ yield chunk 3    ────┼──→──│ ✗ DROPPED   │
-  │ chunk 4 (64KB) ──┼──→────│ yield chunk 4    ────┼──→──│ ✗ DROPPED   │
+  │ chunk 1 (~4KB) ──┼──→────│ yield chunk 1    ────┼──→──│ ✓ consumed  │
+  │ chunk 2 (~4KB) ──┼──→────│ yield chunk 2    ────┼──→──│ ✗ DROPPED   │
+  │ ...              │       │ ...                  │     │             │
+  │ chunk 65 (~1KB)──┼──→────│ yield chunk 65   ────┼──→──│ ✗ DROPPED   │
   └──────────────────┘       └──────────────────────┘     └─────────────┘
-                                                           Response: 64KB
+                                                           Response: ~3.5KB
                                                            Expected: 256KB
 ```
 
+> **Note:** R2's ReadableStream yields ~4KB chunks (first chunk 3,493 bytes, then 4,096 bytes each, final chunk 603 bytes — 65 chunks total for 256KB), not the 64KB chunks you might expect.
+
 **Endpoint:** `GET /streaming/{key}`
 
-### Layer 2: FFI double-crossing exhausts Wasm memory (>~10MB)
+### Layer 2: FFI double-crossing exhausts Wasm memory (>~10MB) — NOT REPRODUCED
 
 Reading R2 body chunks into Python bytes via `getReader()`, then returning them as a `Response`, crosses the FFI boundary **twice**.  The data exists in three simultaneous copies:
 
@@ -34,10 +36,12 @@ Reading R2 body chunks into Python bytes via `getReader()`, then returning them 
   │  3. JS Response body  ◄─┼──────│                           │
   └─────────────────────────┘      └──────────────────────────┘
 
-  For 50MB file: ~150MB in Wasm linear memory → Worker crash
+  For 50MB file: ~150MB in Wasm linear memory → Worker crash (in theory)
 ```
 
-This works fine for small files (256KB = ~768KB peak, well within limits).  For large files (>~10MB), the Worker crashes with a generic error page — no stack trace.
+This works fine for small files (256KB = ~768KB peak, well within limits).  For large files (>~10MB), the Worker was expected to crash with a generic error page — no stack trace.
+
+> **Status (2026-03-05):** This bug was **not reproduced** in deployed testing. A 50MB file was returned successfully via `/asgi-full-body/` with HTTP 200 and all 52,428,800 bytes intact. The platform may have increased Wasm memory limits or improved memory management since this issue was originally observed. The workaround (staying on the JS side) is still recommended as a best practice to avoid unnecessary FFI crossings.
 
 **Endpoint:** `GET /asgi-full-body/{key}`
 
@@ -81,7 +85,7 @@ uv run pywrangler deploy
 curl -X POST https://<worker>.workers.dev/seed-small?size_kb=256
 curl -X POST https://<worker>.workers.dev/seed?size_mb=50
 
-# Test Bug 1: StreamingResponse truncation (256KB file, returns ~64KB)
+# Test Bug 1: StreamingResponse truncation (256KB file, returns ~3.5KB first chunk)
 curl -s https://<worker>.workers.dev/streaming/test-256kb | wc -c
 
 # Test Bug 2: Memory crash (50MB file)
