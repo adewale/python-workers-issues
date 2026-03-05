@@ -13,6 +13,25 @@ from contextlib import contextmanager
 REPO_ROOT = Path(__file__).parents[1]
 
 
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Print a clear summary of which platform bugs were confirmed."""
+    xfailed = terminalreporter.stats.get("xfailed", [])
+    passed = terminalreporter.stats.get("passed", [])
+    failed = terminalreporter.stats.get("failed", [])
+    if not xfailed and not passed:
+        return
+
+    terminalreporter.section("Results")
+    for report in xfailed:
+        terminalreporter.line(f"  CONFIRMED  {report.wasxfail}")
+    for report in passed:
+        name = report.nodeid.split("::")[-1]
+        terminalreporter.line(f"  PASSED     {name}")
+    for report in failed:
+        name = report.nodeid.split("::")[-1]
+        terminalreporter.line(f"  FAILED     {name}")
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--deployed-url",
@@ -103,6 +122,7 @@ def _deploy_worker(directory: str) -> str:
     """Deploy a Worker, wait for it to be ready, and return its URL."""
     import requests as _requests
 
+    print(f"\nDeploying worker from {directory}/...", flush=True)
     result = subprocess.run(
         ["uv", "run", "pywrangler", "deploy"],
         cwd=REPO_ROOT / directory,
@@ -118,16 +138,20 @@ def _deploy_worker(directory: str) -> str:
             f"Could not find workers.dev URL in deploy output:\n{output}"
         )
     url = match.group(1)
+    print(f"Deployed to {url}", flush=True)
 
     # Wait for the worker to be reachable after deploy
+    print("Waiting for worker to be reachable...", end="", flush=True)
     deadline = time.time() + 30
     while time.time() < deadline:
         try:
             resp = _requests.get(url, timeout=5)
             if resp.status_code < 500:
+                print(" ready.\n", flush=True)
                 return url
         except _requests.exceptions.ConnectionError:
             pass
+        print(".", end="", flush=True)
         time.sleep(2)
 
     raise RuntimeError(f"Worker at {url} not ready within 30s after deploy")
@@ -161,6 +185,9 @@ def _dir_for_test(test_name: str) -> str:
     return test_name.replace("test_", "").replace("_", "-")
 
 
+_deployed_urls: dict[str, str] = {}
+
+
 @pytest.fixture
 def deployed_url(request):
     """Base URL of a deployed Worker.
@@ -168,6 +195,7 @@ def deployed_url(request):
     Resolution order:
       1. --deployed-url flag or DEPLOYED_WORKER_URL env var (explicit)
       2. --deploy flag: runs pywrangler deploy and captures the URL
+         (cached per directory so multiple tests share one deploy)
       3. Skip the test
     """
     url = request.config.getoption("--deployed-url") or os.environ.get(
@@ -180,7 +208,9 @@ def deployed_url(request):
     dir_name = _dir_for_test(test_name)
 
     if request.config.getoption("--deploy"):
-        return _deploy_worker(dir_name)
+        if dir_name not in _deployed_urls:
+            _deployed_urls[dir_name] = _deploy_worker(dir_name)
+        return _deployed_urls[dir_name]
 
     pytest.skip(
         "No deployed Worker URL (use --deployed-url, --deploy, or DEPLOYED_WORKER_URL)"

@@ -7,44 +7,94 @@ Two independent bugs that affect returning R2 data through Python Workers.
 From the repo root:
 
 ```bash
-uv run pytest tests/test_examples.py -k test_4 --deploy -v -s -rX
+uv run pytest tests/test_examples.py -k test_4 --deploy -v -s
 ```
 
 This deploys the Worker and runs three tests.  Expected output:
 
 ```
-tests/test_examples.py::test_4a_streaming_truncation XFAIL
+tests/test_examples.py::test_4a_streaming_truncation
+Deploying worker from 4-r2-large-binary-roundtrip/...
+Deployed to https://r2-large-binary-roundtrip.<subdomain>.workers.dev
+Waiting for worker to be reachable... ready.
+
+--- Bug 1: ASGI StreamingResponse truncation ---
+Seeding 256KB test file to R2...
+  Stored 262,144 bytes as 'test-256kb'
+
+GET /fixed/test-256kb  (JS bypass — data never enters Python)
+  262,144 bytes — OK (workaround works)
+
+GET /asgi-full-body/test-256kb  (full body read through Python)
+  262,144 bytes — OK (works for small files)
+
+GET /streaming/test-256kb  (async generator + StreamingResponse)
+  3,493 bytes — TRUNCATED (expected 262,144)
+
+  BUG 1 CONFIRMED: The ASGI adapter consumed only the first
+  chunk from the async generator and dropped the rest.
+  StreamingResponse is broken for any file that spans
+  multiple R2 chunks (~4KB each).
+XFAIL
+
 tests/test_examples.py::test_4b_memory_crash_probe
-  Probe results:
-    10MB: OK (10485760 bytes)
-    20MB: OK (20971520 bytes)
-    30MB: OK (31457280 bytes)
-    40MB: OK (41943040 bytes)
-    50MB: OK (52428800 bytes)
-    60MB: seed crashed (HTTP 503)
+--- Bug 2: Wasm memory exhaustion from FFI round-trip ---
+Reading R2 data into Python bytes, then returning via Response,
+creates 3 simultaneous copies in Wasm memory. This test finds
+the size at which the Worker crashes.
 
-    Last successful: 50MB
-    Crashed at: 60MB
-  XFAIL
-tests/test_examples.py::test_4c_diagnostics PASSED
+Escalating R2 round-trip: seed → read into Python → return
 
-========================= XFAIL summary ===========================
-XFAILED test_4a - Bug 1 confirmed: StreamingResponse returned 3493
-    bytes, expected 262144. ASGI adapter truncates async generators
-    to the first yielded chunk (~4KB).
-XFAILED test_4b - Bug 2 confirmed: FFI round-trip crashed at 60MB
-    (last success: 50MB). Wasm memory exhausted by 3x copies of R2
-    data crossing the FFI boundary.
-============ 1 passed, 2 xfailed in ~180s ========================
+  10MB: seeding... ok. round-tripping... OK (10,485,760 bytes)
+  20MB: seeding... ok. round-tripping... OK (20,971,520 bytes)
+  30MB: seeding... ok. round-tripping... OK (31,457,280 bytes)
+  40MB: seeding... ok. round-tripping... OK (41,943,040 bytes)
+  50MB: seeding... CRASHED (HTTP 503)
+
+  BUG 2 CONFIRMED: Worker crashed at 50MB.
+  Last successful round-trip: 40MB.
+  At 50MB, Wasm linear memory cannot hold 3 copies
+  (150MB total: R2 buffer + Python bytes + JS Response).
+  Workers with more packages crash at lower sizes.
+XFAIL
+
+tests/test_examples.py::test_4c_diagnostics
+--- Diagnostics: R2 chunk analysis for 256KB file ---
+Seeding 256KB test file...
+  Stored as 'test-256kb'
+
+GET /compare/test-256kb
+  R2 body size:    262,144 bytes
+  Chunk count:     65
+  Chunk sizes:     [3493, 4096, 4096, ..., 4096, 603]
+
+  What each endpoint would return:
+    /streaming/       3,493 bytes  (first chunk only — Bug 1)
+    /asgi-full-body/  262,144 bytes  (all chunks joined)
+    /fixed/           262,144 bytes  (JS bypass)
+
+  FFI boundary crossings:
+    /asgi-full-body: JS→Python (getReader) then Python→JS (Response) = 2 crossings
+    /streaming: ...truncates after first yield
+    /fixed: JS→JS (R2 body → Response) = 0 crossings, data never enters Python
+PASSED
+
+=================================== Results ====================================
+  CONFIRMED  Bug 1: StreamingResponse returned 3493 bytes, expected 262144.
+             ASGI adapter truncates async generators to the first yielded chunk.
+  CONFIRMED  Bug 2: FFI round-trip crashed at 50MB (last success: 40MB).
+             Wasm memory exhausted by 3x copies of R2 data crossing the
+             FFI boundary.
+  PASSED     test_4c_diagnostics
 ```
 
-The Bug 2 threshold varies between runs (50–60MB for this minimal Worker).  A Worker with more packages crashes at a lower size.
+The Bug 2 crash threshold varies between runs (50–60MB for this minimal Worker) depending on GC state and per-isolate memory pressure.  A Worker with more packages crashes at a lower size.
 
 If you already have a deployed Worker, skip the deploy step:
 
 ```bash
 uv run pytest tests/test_examples.py -k test_4 \
-  --deployed-url https://<worker>.workers.dev -v -s -rX
+  --deployed-url https://<worker>.workers.dev -v -s
 ```
 
 ## Bug 1: ASGI adapter truncates StreamingResponse
