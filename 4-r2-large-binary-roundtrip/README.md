@@ -20,11 +20,11 @@ The Workers ASGI adapter only consumes the **first** yielded chunk from an async
                                                            Expected: 256KB
 ```
 
-> **Note:** R2's ReadableStream yields ~4KB chunks (first chunk 3,493 bytes, then 4,096 bytes each, final chunk 603 bytes — 65 chunks total for 256KB), not the 64KB chunks you might expect.
+> **Chunk sizes:** R2's ReadableStream yields ~4KB chunks (first chunk 3,493 bytes, then 4,096 bytes each, final chunk 603 bytes — 65 chunks total for 256KB).
 
 **Endpoint:** `GET /streaming/{key}`
 
-### Layer 2: FFI double-crossing exhausts Wasm memory (>~10MB) — NOT REPRODUCED
+### Layer 2: FFI double-crossing exhausts Wasm memory (large files)
 
 Reading R2 body chunks into Python bytes via `getReader()`, then returning them as a `Response`, crosses the FFI boundary **twice**.  The data exists in three simultaneous copies:
 
@@ -36,12 +36,17 @@ Reading R2 body chunks into Python bytes via `getReader()`, then returning them 
   │  3. JS Response body  ◄─┼──────│                           │
   └─────────────────────────┘      └──────────────────────────┘
 
-  For 50MB file: ~150MB in Wasm linear memory → Worker crash (in theory)
+  Total memory ≈ 3× file size in Wasm linear memory
 ```
 
-This works fine for small files (256KB = ~768KB peak, well within limits).  For large files (>~10MB), the Worker was expected to crash with a generic error page — no stack trace.
+The crash threshold depends on the Worker's baseline memory footprint:
 
-> **Status (2026-03-05):** This bug was **not reproduced** in deployed testing. A 50MB file was returned successfully via `/asgi-full-body/` with HTTP 200 and all 52,428,800 bytes intact. The platform may have increased Wasm memory limits or improved memory management since this issue was originally observed. The workaround (staying on the JS side) is still recommended as a best practice to avoid unnecessary FFI crossings.
+| Worker type | Packages | Upload size | Crash threshold |
+|-------------|----------|-------------|-----------------|
+| **Minimal** (this repo) | FastAPI only | ~small | >50MB (not hit) |
+| **Production app** (Tasche) | FastAPI + httpx + BS4 + markdownify (457 modules) | 9.5MB | ~42MB (flaky — 8/10 pass, 2/10 crash) |
+
+> **Why this repo alone can't reproduce it:** A minimal Worker has enough Wasm headroom for 50MB.  A real app with many packages already consumes a significant portion of the Wasm linear memory budget, pushing the crash threshold down.  The `/probe` endpoint finds the threshold for *this* Worker's footprint.
 
 **Endpoint:** `GET /asgi-full-body/{key}`
 
@@ -74,6 +79,8 @@ return js.Response.new(obj.body, headers=to_js({...}))
 | `GET /streaming/{key}` | Async generator + `StreamingResponse` | Bug 1 (truncation at any size) |
 | `GET /compare/{key}` | JSON diagnostics for all paths | — |
 | `GET /fixed/{key}` | R2 ReadableStream → JS Response directly | Workaround (always works) |
+| `POST /probe/seed/{size_mb}` | Seed a probe binary of given size | — |
+| `GET /probe/roundtrip/{size_mb}` | Round-trip probe binary through Python | Bug 2 (crashes at threshold) |
 
 ## Run
 
@@ -81,23 +88,55 @@ return js.Response.new(obj.body, headers=to_js({...}))
 # Deploy (these bugs require real Cloudflare, not Miniflare)
 uv run pywrangler deploy
 
-# Seed test data
+# Test Bug 1: StreamingResponse truncation (256KB file, returns ~3.5KB)
 curl -X POST https://<worker>.workers.dev/seed-small?size_kb=256
-curl -X POST https://<worker>.workers.dev/seed?size_mb=50
-
-# Test Bug 1: StreamingResponse truncation (256KB file, returns ~3.5KB first chunk)
 curl -s https://<worker>.workers.dev/streaming/test-256kb | wc -c
 
-# Test Bug 2: Memory crash (50MB file)
-curl -s https://<worker>.workers.dev/asgi-full-body/test-50mb | wc -c
+# Test Bug 2: Find crash threshold (seed then round-trip, 10MB at a time)
+for mb in 10 20 30 40 50 60 70 80 90 100; do
+  curl -s -X POST "https://<worker>.workers.dev/probe/seed/$mb" > /dev/null
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://<worker>.workers.dev/probe/roundtrip/$mb")
+  echo "${mb}MB: HTTP $STATUS"
+  [ "$STATUS" != "200" ] && echo "  ^ Threshold found at ${mb}MB" && break
+done
 
-# Workaround: always works
+# Workaround: always works at any size
+curl -X POST https://<worker>.workers.dev/seed?size_mb=50
 curl -s https://<worker>.workers.dev/fixed/test-50mb | wc -c
 
 # Diagnostics
 curl -s https://<worker>.workers.dev/compare/test-256kb | python -m json.tool
 ```
 
+## Cross-validation with Tasche
+
+The crash threshold was verified on [Tasche](https://github.com/adewale/tasche) (a production Python Worker with 457 vendored modules / 9.5MB upload size).  Tasche staging has debug endpoints that exercise the same FFI round-trip:
+
+```bash
+BASE="https://tasche-staging.adewale-883.workers.dev"
+
+# Seed and round-trip at escalating sizes
+curl -s -X POST "$BASE/api/debug/r2-seed?size_kb=40960"   # 40MB — works
+curl -s -X POST "$BASE/api/debug/r2-seed?size_kb=51200"   # 50MB — crashes
+
+curl -s -o /dev/null -w "%{http_code}" "$BASE/api/debug/r2-roundtrip/40960"  # 200
+curl -s -o /dev/null -w "%{http_code}" "$BASE/api/debug/r2-roundtrip/51200"  # 500 (error 1101)
+```
+
+Results from 2026-03-05 staging testing:
+
+| Size | HTTP | Notes |
+|------|------|-------|
+| 10MB | 200 | Always works |
+| 25MB | 200 | Always works |
+| 40MB | 200 | Always works |
+| 41MB | 200 | Always works |
+| 42MB | 200 | **Flaky** — 8/10 pass, 2/10 crash (error 1101) |
+| 45MB | 500 | Always crashes |
+| 50MB | 500 | Always crashes |
+
+The threshold is not sharp — it varies with GC state, stack depth, and other per-request allocations.  The flaky zone at ~42MB is consistent with a memory-pressure issue rather than a fixed limit.
+
 ## Context
 
-Discovered in [Tasche](https://github.com/AdeWale/tasche), a read-it-later app using Python Workers.  The TTS feature stored audio in R2 and served it via a FastAPI endpoint.  Bug 1 (truncation) was found when `StreamingResponse` silently returned only the first chunk of audio.  Bug 2 (memory crash) was found when MeloTTS returned 49MB WAV files that crashed the Worker on every request.
+Discovered in [Tasche](https://github.com/adewale/tasche), a read-it-later app using Python Workers.  Bug 1 (truncation) was found when `StreamingResponse` silently returned only the first ~3.5KB chunk of TTS audio.  Bug 2 (memory crash) was found when MeloTTS returned 49MB WAV files that crashed the Worker — but could not be reproduced with this minimal Worker because it lacks the package weight that pushes the memory budget past the threshold.

@@ -8,10 +8,13 @@ Bug 1 — ASGI adapter truncates StreamingResponse (any size):
     async generator, silently dropping all subsequent chunks.  This happens
     even for a 256KB file.
 
-Bug 2 — FFI double-crossing exhausts Wasm memory (>~10MB):
+Bug 2 — FFI double-crossing exhausts Wasm memory (large files):
     Reading R2 body into Python bytes, then returning via Response, creates
     three simultaneous copies (R2 buffer + Python bytes + JS Response body).
-    Works for small files, crashes the Worker for >~10MB.
+    Works for small files, crashes the Worker when the total memory pressure
+    exceeds Wasm limits.  The exact threshold depends on the Worker's
+    baseline memory footprint — a minimal Worker may handle 50MB while a
+    heavier Worker (with many packages) crashes at ~42MB.
 
 Workaround — stay on the JS side:
     Intercept the request in fetch() before ASGI and pass R2's body
@@ -24,6 +27,8 @@ Endpoints:
     GET  /streaming/{key}       — Bug 1: async generator + StreamingResponse (truncated)
     GET  /compare/{key}         — Diagnostic: JSON breakdown of what each path would return
     GET  /fixed/{key}           — Workaround: R2 ReadableStream passed directly to JS Response
+    POST /probe/seed/{size_mb}  — Seed a probe binary of given size
+    GET  /probe/roundtrip/{size_mb} — Round-trip probe binary through Python (crashes at threshold)
 """
 
 import json
@@ -76,7 +81,7 @@ async def root():
         "example": "R2 Large Binary Round-Trip",
         "bugs": {
             "bug_1": "ASGI adapter truncates StreamingResponse to first chunk (any size)",
-            "bug_2": "FFI double-crossing exhausts Wasm memory for large files (>~10MB)",
+            "bug_2": "FFI double-crossing exhausts Wasm memory for large files",
         },
         "endpoints": {
             "POST /seed?size_mb=50": "Store a large binary in R2",
@@ -85,6 +90,8 @@ async def root():
             "GET /streaming/{key}": "Bug 1: StreamingResponse truncated to first chunk",
             "GET /compare/{key}": "Diagnostic: JSON breakdown of all paths",
             "GET /fixed/{key}": "Workaround: R2 ReadableStream bypasses Python entirely",
+            "POST /probe/seed/{size_mb}": "Seed a probe binary of given size",
+            "GET /probe/roundtrip/{size_mb}": "Round-trip probe binary through Python (crashes at threshold)",
         },
     }
 
@@ -139,9 +146,9 @@ async def asgi_full_body(key: str, req: Request):
       1. JS ReadableStream → Python bytes  (JS→Python via getReader)
       2. Python bytes → ASGI Response body  (Python→JS)
 
-    Works for small files.  For large files (>~10MB), the three
-    simultaneous copies (R2 buffer + Python bytes + JS Response body)
-    exhaust Wasm linear memory and crash the Worker.
+    Works for small files.  For large files, the three simultaneous
+    copies (R2 buffer + Python bytes + JS Response body) exhaust Wasm
+    linear memory and crash the Worker.
     """
     env = req.scope["env"]
     r2 = env.BUCKET
@@ -179,7 +186,7 @@ async def streaming_read(key: str, req: Request):
 
     The Workers ASGI adapter only consumes the FIRST yielded chunk,
     silently dropping all subsequent chunks.  The response will be
-    truncated to ~64KB (one R2 chunk) regardless of the actual file size.
+    truncated to ~4KB (one R2 chunk) regardless of the actual file size.
     """
     env = req.scope["env"]
     r2 = env.BUCKET
@@ -237,11 +244,71 @@ async def compare_paths(key: str, req: Request):
         "full_body_would_return": total_size,
         "fixed_would_return": total_size,
         "ffi_crossings": {
-            "/asgi-full-body": "JS→Python (getReader) then Python→JS (Response) = 2 crossings",
-            "/streaming": "JS→Python (getReader) then Python→JS (StreamingResponse) = 2 crossings, but adapter truncates after first yield",
-            "/fixed": "JS→JS (R2 body → Response) = 0 crossings, data never enters Python",
+            "/asgi-full-body": (
+                "JS→Python (getReader) then Python→JS (Response)"
+                " = 2 crossings"
+            ),
+            "/streaming": (
+                "JS→Python (getReader) then Python→JS (StreamingResponse)"
+                " = 2 crossings, but adapter truncates after first yield"
+            ),
+            "/fixed": (
+                "JS→JS (R2 body → Response)"
+                " = 0 crossings, data never enters Python"
+            ),
         },
     })
+
+
+# --------------------------------------------------------------------------
+# Probe: find memory crash threshold
+# --------------------------------------------------------------------------
+
+
+@app.post("/probe/seed/{size_mb}")
+async def probe_seed(size_mb: int, req: Request):
+    """Seed a probe binary of the given size.
+
+    Separate from round-trip so each step runs in a fresh isolate
+    and doesn't accumulate memory from the seed allocation.
+    """
+    env = req.scope["env"]
+    r2 = env.BUCKET
+    expected_bytes = size_mb * 1024 * 1024
+    data = bytes(range(256)) * (expected_bytes // 256)
+    key = f"probe-{size_mb}mb"
+    js_view = to_js(data)
+    js_owned = js_view.slice()
+    await r2.put(key, js_owned)
+    return {"size_mb": size_mb, "stored_bytes": len(data), "key": key}
+
+
+@app.get("/probe/roundtrip/{size_mb}")
+async def probe_roundtrip(size_mb: int, req: Request):
+    """Round-trip a probe binary through Python and return it.
+
+    If this crashes (HTTP 500 / error 1101), the threshold has been
+    found.  Each call runs in its own isolate so memory doesn't
+    accumulate across steps.
+    """
+    env = req.scope["env"]
+    r2 = env.BUCKET
+    key = f"probe-{size_mb}mb"
+    obj = await r2.get(key)
+    if obj is None:
+        return Response(
+            content=f"probe key {key} not found",
+            status_code=404,
+        )
+
+    parts, _ = await _read_all_chunks(obj.body)
+    full_body = b"".join(parts)
+
+    return Response(
+        content=full_body,
+        media_type="application/octet-stream",
+        headers={"content-length": str(len(full_body))},
+    )
 
 
 # --------------------------------------------------------------------------

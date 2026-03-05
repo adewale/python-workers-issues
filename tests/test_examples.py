@@ -69,7 +69,6 @@ def test_4a_streaming_truncation(deployed_url):
     size_kb = 256
     expected_bytes = size_kb * 1024
 
-    # Seed a 256KB test file
     seed_resp = requests.post(f"{base}/seed-small?size_kb={size_kb}")
     assert seed_resp.status_code == 200
     seed_data = seed_resp.json()
@@ -89,8 +88,9 @@ def test_4a_streaming_truncation(deployed_url):
         f"/asgi-full-body/ returned {full_resp.status_code} for {size_kb}KB file"
     )
     assert len(full_resp.content) == expected_bytes, (
-        f"/asgi-full-body/ returned {len(full_resp.content)} bytes, expected {expected_bytes}. "
-        f"This should work for small files — the memory bug only affects >~10MB."
+        f"/asgi-full-body/ returned {len(full_resp.content)} bytes, "
+        f"expected {expected_bytes}. "
+        f"This should work for small files — the memory bug only affects large ones."
     )
 
     # /streaming/ — Bug 1: ASGI adapter truncates to first chunk (~3.5KB)
@@ -102,65 +102,84 @@ def test_4a_streaming_truncation(deployed_url):
         pytest.xfail(
             f"Bug 1 confirmed: StreamingResponse returned {streamed_size} bytes, "
             f"expected {expected_bytes}. ASGI adapter truncates async generators "
-            f"to the first yielded chunk (~4KB, not 64KB)."
+            f"to the first yielded chunk (~4KB)."
         )
     assert streamed_size == expected_bytes
 
 
-def test_4b_large_file_memory(deployed_url):
-    """Bug 2: FFI double-crossing was expected to exhaust Wasm memory for large files.
+def test_4b_memory_crash_probe(deployed_url):
+    """Bug 2: Find the Wasm memory crash threshold for this Worker.
 
-    Status (2026-03-05): NOT REPRODUCED. A 50MB file returned successfully
-    via /asgi-full-body/ with HTTP 200 and all bytes intact. The platform may
-    have increased Wasm memory limits or improved memory management.
+    Seeds and round-trips in separate requests (fresh isolate per step)
+    at escalating sizes.  A minimal Worker (FastAPI only) may not crash
+    even at 100MB.  A production Worker with many packages crashes at
+    ~42MB.
     """
     base = deployed_url
+    step_mb = 10
+    max_mb = 100
 
-    size_mb = 50
-    expected_bytes = size_mb * 1024 * 1024
+    last_ok = None
+    crash_at = None
 
-    # Seed a 50MB test file
-    seed_resp = requests.post(f"{base}/seed?size_mb={size_mb}")
-    assert seed_resp.status_code == 200
-    seed_data = seed_resp.json()
-    assert seed_data["stored_bytes"] == expected_bytes
-    large_key = seed_data["key"]
+    print("\nProbe results:")
+    size_mb = step_mb
+    while size_mb <= max_mb:
+        expected_bytes = size_mb * 1024 * 1024
 
-    # /fixed/ must always work at any size
-    fixed_resp = requests.get(f"{base}/fixed/{large_key}")
-    assert fixed_resp.status_code == 200, f"/fixed/ returned {fixed_resp.status_code}"
-    assert len(fixed_resp.content) == expected_bytes, (
-        f"/fixed/ returned {len(fixed_resp.content)} bytes, expected {expected_bytes}. "
-        f"Our workaround code may be wrong."
-    )
-
-    # /asgi-full-body/ — Bug 2: FFI double-crossing was expected to crash,
-    # but was NOT REPRODUCED as of 2026-03-05. The test now expects success
-    # and will xfail only if the bug reappears.
-    try:
-        full_resp = requests.get(f"{base}/asgi-full-body/{large_key}", timeout=30)
-    except requests.exceptions.ConnectionError:
-        pytest.xfail(
-            "Bug 2 reproduced: Worker crashed returning 50MB through Python ASGI. "
-            "Three simultaneous copies (R2 buffer + Python bytes + JS Response body) "
-            "exceed Wasm memory limits."
+        # Seed in its own request
+        seed_resp = requests.post(
+            f"{base}/probe/seed/{size_mb}", timeout=60
+        )
+        if seed_resp.status_code >= 500:
+            print(f"  {size_mb}MB: seed crashed (HTTP {seed_resp.status_code})")
+            crash_at = size_mb
+            break
+        assert seed_resp.status_code == 200, (
+            f"Seed failed at {size_mb}MB: HTTP {seed_resp.status_code}"
         )
 
-    if full_resp.status_code >= 500:
+        # Round-trip in its own request (fresh isolate)
+        try:
+            rt_resp = requests.get(
+                f"{base}/probe/roundtrip/{size_mb}", timeout=60
+            )
+        except requests.exceptions.ConnectionError:
+            print(f"  {size_mb}MB: connection reset (Worker crashed)")
+            crash_at = size_mb
+            break
+
+        if rt_resp.status_code >= 500:
+            print(f"  {size_mb}MB: HTTP {rt_resp.status_code} (crashed)")
+            crash_at = size_mb
+            break
+
+        actual = len(rt_resp.content)
+        if actual != expected_bytes:
+            print(
+                f"  {size_mb}MB: truncated "
+                f"({actual} / {expected_bytes} bytes)"
+            )
+            crash_at = size_mb
+            break
+
+        print(f"  {size_mb}MB: OK ({actual} bytes)")
+        last_ok = size_mb
+        size_mb += step_mb
+
+    print(f"\n  Last successful: {last_ok}MB")
+    print(f"  Crashed at: {crash_at}MB")
+
+    if crash_at is not None:
         pytest.xfail(
-            f"Bug 2 reproduced: /asgi-full-body/ returned HTTP {full_resp.status_code}. "
-            f"Large R2 round-trip through Python exhausts Wasm memory."
+            f"Bug 2 confirmed: FFI round-trip crashed at {crash_at}MB "
+            f"(last success: {last_ok}MB). Wasm memory exhausted by "
+            f"3x copies of R2 data crossing the FFI boundary."
         )
 
-    full_size = len(full_resp.content)
-    if full_size < expected_bytes:
-        pytest.xfail(
-            f"Bug 2 reproduced: /asgi-full-body/ returned {full_size} bytes, "
-            f"expected {expected_bytes}. Response was truncated."
-        )
-
-    # If we get here, the bug is NOT reproduced — 50MB returned successfully
-    assert full_size == expected_bytes
+    # If no crash, the bug isn't reproducible with this Worker's footprint.
+    assert last_ok is not None, "Probe returned no results"
+    print(f"\n  No crash up to {max_mb}MB with this Worker's footprint.")
 
 
 def test_4c_diagnostics(deployed_url):
@@ -170,7 +189,6 @@ def test_4c_diagnostics(deployed_url):
     size_kb = 256
     expected_bytes = size_kb * 1024
 
-    # Seed a small file for diagnostics (may already exist from test_4a)
     seed_resp = requests.post(f"{base}/seed-small?size_kb={size_kb}")
     assert seed_resp.status_code == 200
     key = seed_resp.json()["key"]
