@@ -142,6 +142,25 @@ def _worker_name_from_config(directory: str) -> str:
     return json.loads(text)["name"]
 
 
+# Map test name prefixes to issue directories.
+# The dev_server fixture derives directory from test name automatically
+# (e.g. test_2_foo -> 2-foo), but deployed tests use split names like
+# test_4a_foo that don't map to directory 4-r2-large-binary-roundtrip.
+_TEST_DIR_OVERRIDES = {
+    "4a": "4-r2-large-binary-roundtrip",
+    "4b": "4-r2-large-binary-roundtrip",
+    "4c": "4-r2-large-binary-roundtrip",
+}
+
+
+def _dir_for_test(test_name: str) -> str:
+    """Resolve the issue directory for a test name."""
+    prefix = test_name.replace("test_", "").split("_")[0]
+    if prefix in _TEST_DIR_OVERRIDES:
+        return _TEST_DIR_OVERRIDES[prefix]
+    return test_name.replace("test_", "").replace("_", "-")
+
+
 @pytest.fixture
 def deployed_url(request):
     """Base URL of a deployed Worker.
@@ -158,7 +177,7 @@ def deployed_url(request):
         return url.rstrip("/")
 
     test_name = request.node.name
-    dir_name = test_name.replace("test_", "").replace("_", "-")
+    dir_name = _dir_for_test(test_name)
 
     if request.config.getoption("--deploy"):
         return _deploy_worker(dir_name)
