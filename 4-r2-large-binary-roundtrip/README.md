@@ -1,53 +1,99 @@
-# R2 Large Binary Round-Trip — Pyodide FFI Crash
+# R2 Binary Round-Trip — Two Pyodide FFI Bugs
 
-## The Bug
+This Worker demonstrates two **independent** bugs that affect returning R2 data through Python Workers, isolated into separate endpoints so each can be tested and understood on its own.
 
-Returning large R2 objects (>~10MB) through a Python ASGI response crashes the Worker. The data must cross the Pyodide FFI boundary **twice**:
+## Two Bugs, Two Layers
 
-1. **JS → Python:** R2 `ReadableStream` → Python `bytes` (via `getReader()` / `.arrayBuffer().to_py()`)
-2. **Python → JS:** Python `bytes` → ASGI `Response` body → JS `Response`
+### Layer 1: ASGI adapter truncates StreamingResponse (any size)
 
-This doubles memory usage in the Wasm linear memory. For a 49MB WAV file (real-world TTS output from MeloTTS), the Worker crashes with a generic "Worker threw exception" HTML error page — no useful stack trace, no error in browser DevTools.
+The Workers ASGI adapter only consumes the **first** yielded chunk from an async generator passed to `StreamingResponse`.  All subsequent chunks are silently dropped.  This happens at any file size — even 256KB.
 
-```python
-# DO NOT DO THIS for large R2 objects:
-obj = await r2.get(key)
-reader = obj.body.getReader()
-parts = []
-while True:
-    result = await reader.read()
-    if result.done:
-        break
-    parts.append(bytes(result.value.to_py()))
-
-full_body = b"".join(parts)
-return Response(content=full_body)  # Crashes for >~10MB!
+```
+   R2 ReadableStream          Python async generator       ASGI adapter
+  ┌──────────────────┐       ┌──────────────────────┐     ┌─────────────┐
+  │ chunk 1 (64KB) ──┼──→────│ yield chunk 1    ────┼──→──│ ✓ consumed  │
+  │ chunk 2 (64KB) ──┼──→────│ yield chunk 2    ────┼──→──│ ✗ DROPPED   │
+  │ chunk 3 (64KB) ──┼──→────│ yield chunk 3    ────┼──→──│ ✗ DROPPED   │
+  │ chunk 4 (64KB) ──┼──→────│ yield chunk 4    ────┼──→──│ ✗ DROPPED   │
+  └──────────────────┘       └──────────────────────┘     └─────────────┘
+                                                           Response: 64KB
+                                                           Expected: 256KB
 ```
 
-## The Workaround
+**Endpoint:** `GET /streaming/{key}`
 
-Bypass Python entirely by passing R2's `body` ReadableStream directly to a JS `Response`. The data never enters Python memory:
+### Layer 2: FFI double-crossing exhausts Wasm memory (>~10MB)
 
-```python
-import js
-from pyodide.ffi import to_js
+Reading R2 body chunks into Python bytes via `getReader()`, then returning them as a `Response`, crosses the FFI boundary **twice**.  The data exists in three simultaneous copies:
 
-obj = await env.BUCKET.get(key)
-headers = to_js({"content-type": "application/octet-stream"})
-return js.Response.new(obj.body, headers=headers)
+```
+             JS side                          Python side
+  ┌─────────────────────────┐      ┌──────────────────────────┐
+  │  1. R2 body buffer      │──→───│  2. Python bytes          │
+  │                         │      │     (full_body = b"...")   │
+  │  3. JS Response body  ◄─┼──────│                           │
+  └─────────────────────────┘      └──────────────────────────┘
+
+  For 50MB file: ~150MB in Wasm linear memory → Worker crash
 ```
 
-This must be done **before** delegating to the ASGI adapter (FastAPI), since ASGI responses always cross the FFI boundary.
+This works fine for small files (256KB = ~768KB peak, well within limits).  For large files (>~10MB), the Worker crashes with a generic error page — no stack trace.
+
+**Endpoint:** `GET /asgi-full-body/{key}`
+
+### The workaround: stay on the JS side
+
+Intercept the request in the Worker's `fetch()` method **before** it reaches the ASGI adapter.  Pass R2's `body` ReadableStream directly to a `js.Response`.  Data never enters Python memory.
+
+```
+             JS side (only)
+  ┌─────────────────────────┐
+  │  R2 obj.body ──→ Response│   0 FFI crossings
+  └─────────────────────────┘    Works at any size
+```
+
+```python
+# In fetch(), before ASGI:
+obj = await self.env.BUCKET.get(key)
+return js.Response.new(obj.body, headers=to_js({...}))
+```
+
+**Endpoint:** `GET /fixed/{key}`
+
+## Endpoints
+
+| Endpoint | What it does | Bug demonstrated |
+|----------|-------------|-----------------|
+| `POST /seed?size_mb=50` | Store a large binary in R2 | — |
+| `POST /seed-small?size_kb=256` | Store a small binary in R2 | — |
+| `GET /asgi-full-body/{key}` | Read all chunks into Python, return via `Response` | Bug 2 (memory crash for large files) |
+| `GET /streaming/{key}` | Async generator + `StreamingResponse` | Bug 1 (truncation at any size) |
+| `GET /compare/{key}` | JSON diagnostics for all paths | — |
+| `GET /fixed/{key}` | R2 ReadableStream → JS Response directly | Workaround (always works) |
 
 ## Run
 
 ```bash
-uv run pywrangler dev
-# POST http://localhost:8787/seed?size_mb=50  — generate 50MB test data in R2
-# GET  http://localhost:8787/broken/test-50mb — BROKEN: round-trip through Python (crashes)
-# GET  http://localhost:8787/fixed/test-50mb  — FIXED: R2 ReadableStream bypasses Python
+# Deploy (these bugs require real Cloudflare, not Miniflare)
+uv run pywrangler deploy
+
+# Seed test data
+curl -X POST https://<worker>.workers.dev/seed-small?size_kb=256
+curl -X POST https://<worker>.workers.dev/seed?size_mb=50
+
+# Test Bug 1: StreamingResponse truncation (256KB file, returns ~64KB)
+curl -s https://<worker>.workers.dev/streaming/test-256kb | wc -c
+
+# Test Bug 2: Memory crash (50MB file)
+curl -s https://<worker>.workers.dev/asgi-full-body/test-50mb | wc -c
+
+# Workaround: always works
+curl -s https://<worker>.workers.dev/fixed/test-50mb | wc -c
+
+# Diagnostics
+curl -s https://<worker>.workers.dev/compare/test-256kb | python -m json.tool
 ```
 
 ## Context
 
-Discovered in [Tasche](https://github.com/AdeWale/tasche), a read-it-later app using Python Workers. The TTS feature stored audio in R2 and served it via a FastAPI endpoint. MeloTTS returned 49MB WAV files (despite docs claiming MP3), which crashed the Worker on every audio request. The fix was to intercept audio requests in the Worker's `fetch()` method before they reach FastAPI, and pass the R2 ReadableStream directly to a JS Response.
+Discovered in [Tasche](https://github.com/AdeWale/tasche), a read-it-later app using Python Workers.  The TTS feature stored audio in R2 and served it via a FastAPI endpoint.  Bug 1 (truncation) was found when `StreamingResponse` silently returned only the first chunk of audio.  Bug 2 (memory crash) was found when MeloTTS returned 49MB WAV files that crashed the Worker on every request.

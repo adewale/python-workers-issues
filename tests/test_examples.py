@@ -64,47 +64,101 @@ def test_3_httpx_headers(dev_server):
 
 def test_4_r2_large_binary_roundtrip(deployed_url):
     base = deployed_url
-    size_mb = 50
-    expected_size = size_mb * 1024 * 1024
 
-    # Seed a large binary into the production R2 bucket
+    # ------------------------------------------------------------------
+    # Phase 1: Small file (256KB) — isolates Bug 1 (ASGI truncation)
+    # ------------------------------------------------------------------
+    size_kb = 256
+    expected_small = size_kb * 1024
+
+    seed_resp = requests.post(f"{base}/seed-small?size_kb={size_kb}")
+    assert seed_resp.status_code == 200
+    seed_data = seed_resp.json()
+    assert seed_data["stored_bytes"] == expected_small
+    small_key = seed_data["key"]
+
+    # /fixed/ must always work — validates our workaround code
+    fixed_resp = requests.get(f"{base}/fixed/{small_key}")
+    assert fixed_resp.status_code == 200, f"/fixed/ returned {fixed_resp.status_code}"
+    assert len(fixed_resp.content) == expected_small, (
+        f"/fixed/ returned {len(fixed_resp.content)} bytes, expected {expected_small}."
+    )
+
+    # /asgi-full-body/ should work at 256KB — the memory bug only hits large files
+    full_resp = requests.get(f"{base}/asgi-full-body/{small_key}")
+    assert full_resp.status_code == 200, (
+        f"/asgi-full-body/ returned {full_resp.status_code} for {size_kb}KB file"
+    )
+    assert len(full_resp.content) == expected_small, (
+        f"/asgi-full-body/ returned {len(full_resp.content)} bytes, expected {expected_small}. "
+        f"This should work for small files — the memory bug only affects >~10MB."
+    )
+
+    # /streaming/ — Bug 1: ASGI adapter truncates to first chunk
+    stream_resp = requests.get(f"{base}/streaming/{small_key}")
+    assert stream_resp.status_code == 200
+    streamed_size = len(stream_resp.content)
+
+    if streamed_size < expected_small:
+        pytest.xfail(
+            f"Bug 1 confirmed: StreamingResponse returned {streamed_size} bytes, "
+            f"expected {expected_small}. ASGI adapter truncates async generators "
+            f"to the first yielded chunk."
+        )
+    assert streamed_size == expected_small
+
+    # ------------------------------------------------------------------
+    # Phase 2: Large file (50MB) — isolates Bug 2 (Wasm memory crash)
+    # ------------------------------------------------------------------
+    size_mb = 50
+    expected_large = size_mb * 1024 * 1024
+
     seed_resp = requests.post(f"{base}/seed?size_mb={size_mb}")
     assert seed_resp.status_code == 200
     seed_data = seed_resp.json()
-    assert seed_data["stored_bytes"] == expected_size
-    key = seed_data["key"]
+    assert seed_data["stored_bytes"] == expected_large
+    large_key = seed_data["key"]
 
-    # Fixed path MUST always work — validates our workaround code
-    fixed_resp = requests.get(f"{base}/fixed/{key}")
+    # /fixed/ must always work at any size
+    fixed_resp = requests.get(f"{base}/fixed/{large_key}")
     assert fixed_resp.status_code == 200, f"/fixed/ returned {fixed_resp.status_code}"
-    assert len(fixed_resp.content) == expected_size, (
-        f"/fixed/ returned {len(fixed_resp.content)} bytes, expected {expected_size}. "
+    assert len(fixed_resp.content) == expected_large, (
+        f"/fixed/ returned {len(fixed_resp.content)} bytes, expected {expected_large}. "
         f"Our workaround code may be wrong."
     )
 
-    # Broken path — round-trips data through Python memory.
-    # If the platform bug is present, this will crash, truncate, or 500.
-    # If the platform has fixed the bug, this succeeds identically to /fixed/.
+    # /asgi-full-body/ — Bug 2: FFI double-crossing exhausts Wasm memory
     try:
-        broken_resp = requests.get(f"{base}/broken/{key}", timeout=30)
+        full_resp = requests.get(f"{base}/asgi-full-body/{large_key}", timeout=30)
     except requests.exceptions.ConnectionError:
         pytest.xfail(
-            "Platform bug confirmed: Worker crashed returning 50MB through Python "
-            "ASGI. R2 data crossing the Pyodide FFI boundary twice exceeds Wasm "
-            "memory limits."
+            "Bug 2 confirmed: Worker crashed returning 50MB through Python ASGI. "
+            "Three simultaneous copies (R2 buffer + Python bytes + JS Response body) "
+            "exceed Wasm memory limits."
         )
 
-    if broken_resp.status_code >= 500:
+    if full_resp.status_code >= 500:
         pytest.xfail(
-            f"Platform bug confirmed: /broken/ returned HTTP {broken_resp.status_code}. "
-            f"Large R2 round-trip through Python ASGI fails."
+            f"Bug 2 confirmed: /asgi-full-body/ returned HTTP {full_resp.status_code}. "
+            f"Large R2 round-trip through Python exhausts Wasm memory."
         )
 
-    broken_size = len(broken_resp.content)
-    if broken_size < expected_size:
+    full_size = len(full_resp.content)
+    if full_size < expected_large:
         pytest.xfail(
-            f"Platform bug confirmed: /broken/ returned {broken_size} bytes, "
-            f"expected {expected_size}. Response was truncated."
+            f"Bug 2 confirmed: /asgi-full-body/ returned {full_size} bytes, "
+            f"expected {expected_large}. Response was truncated."
         )
 
-    assert broken_size == expected_size
+    assert full_size == expected_large
+
+    # ------------------------------------------------------------------
+    # Phase 3: Diagnostic endpoint
+    # ------------------------------------------------------------------
+    compare_resp = requests.get(f"{base}/compare/{small_key}")
+    assert compare_resp.status_code == 200
+    diag = compare_resp.json()
+    assert diag["r2_body_size"] == expected_small
+    assert diag["chunk_count"] >= 1
+    assert diag["fixed_would_return"] == expected_small
+    assert "ffi_crossings" in diag
