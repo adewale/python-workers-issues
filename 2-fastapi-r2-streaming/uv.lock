@@ -81,6 +81,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "webtypy" },
+    { name = "workers-runtime-sdk" },
 ]
 
 [package.dev-dependencies]
@@ -93,6 +94,7 @@ dev = [
 requires-dist = [
     { name = "fastapi" },
     { name = "webtypy", specifier = ">=0.1.7" },
+    { name = "workers-runtime-sdk", specifier = ">=1.1.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -427,9 +429,9 @@ wheels = [
 
 [[package]]
 name = "workers-runtime-sdk"
-version = "0.3.1"
+version = "1.1.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3a/56/d26fda0c781c538c709951df6ae85b34530acf68f36fabb75e8a4afe155e/workers_runtime_sdk-0.3.1.tar.gz", hash = "sha256:6ed148ed3b8d218bedf173f9c5fc214f2b70b212504303ebeca2669e0f24546a", size = 25169, upload-time = "2025-11-11T18:41:43.084Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e5/6b/c9f9e2e87fbe2c93f46c2a7d46c2d3584cbd5ed747dfe8c33183635e0965/workers_runtime_sdk-1.1.2.tar.gz", hash = "sha256:850c4f10bee0adc79632e6553a0c65d5ef1bc5003c3218d1fa46bc703541f859", size = 30019, upload-time = "2026-04-21T22:28:01.859Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b1/5e/3366889aa83ad20ea90509cfacb2dd78d1906a485bf3509ab16694923cbd/workers_runtime_sdk-0.3.1-py3-none-any.whl", hash = "sha256:0f2feac02c047da43a81cf0c7710fec703f588dee4a602e4230c1e343fab5c94", size = 14456, upload-time = "2025-11-11T18:41:41.971Z" },
+    { url = "https://files.pythonhosted.org/packages/96/b2/31d42e5db8dfd59f3acd12872fb1718642b1049c667ca6bbd4cf2ec9da7d/workers_runtime_sdk-1.1.2-py3-none-any.whl", hash = "sha256:ce5b896cb4ebc07dd2dd1e07a90d85b188caada2ffa18ca0c0cf488b7fe05d9a", size = 17270, upload-time = "2026-04-21T22:28:00.272Z" },
 ]

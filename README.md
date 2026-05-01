@@ -1,6 +1,6 @@
 # Python Workers Issues
 
-Self-contained reproductions of [Python Workers](https://developers.cloudflare.com/workers/languages/python) bugs. Each numbered directory is an independent project that demonstrates a specific issue and its workaround.
+Self-contained reproductions of [Python Workers](https://developers.cloudflare.com/workers/languages/python) bugs. Each numbered directory is an independent project that demonstrates a specific issue and its workaround or, after an upstream fix lands, serves as a regression test.
 
 ## Get started
 
@@ -9,11 +9,14 @@ Self-contained reproductions of [Python Workers](https://developers.cloudflare.c
 3. `uv run pywrangler dev`
 4. Press the `b` key to open a browser tab and make a request to the Worker
 
-## Issues
+## Active Issues
 
-- [**`2-fastapi-r2-streaming/`**](2-fastapi-r2-streaming) — The Workers ASGI adapter only consumes the first yielded chunk from `StreamingResponse` async generators, silently truncating R2 content larger than ~4 KB. **Workaround:** read the full body and return a plain `Response`.
 - [**`3-httpx-headers/`**](3-httpx-headers) — The pywrangler-bundled httpx replaces httpcore with a `jsfetch.py` transport that strips the `User-Agent` header to avoid browser CORS preflights. Workers aren't browsers — this causes 403s from APIs like GitHub that require `User-Agent`. **Workaround:** use `js.fetch()` directly.
 - [**`4-r2-large-binary-roundtrip/`**](4-r2-large-binary-roundtrip) — Returning large R2 objects (>~10MB) through a Python ASGI response crashes the Worker. The data crosses the Pyodide FFI boundary twice (JS→Python→JS), doubling memory usage in Wasm linear memory. **Workaround:** bypass Python by passing R2's `body` ReadableStream directly to a JS `Response`.
+
+## Resolved Issues
+
+- [**`2-fastapi-r2-streaming/`**](2-fastapi-r2-streaming) — Fixed by adding `workers-runtime-sdk>=1.1.1`. The Workers ASGI adapter now consumes all chunks from `StreamingResponse` async generators instead of truncating R2 content after the first chunk.
 
 ## Open Beta and Limits
 

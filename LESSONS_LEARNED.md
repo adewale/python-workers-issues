@@ -76,3 +76,21 @@ Structured post-audit findings from this repository. Each entry is a single wide
 | **date_discovered** | 2026-02-26 |
 | **observation** | Issue 1's claim about `to_js()` was plausible and widely repeated, but wrong for the Pyodide version in use. The actual source code (`HEAP8.slice()`) was one click away and unambiguous. |
 | **takeaway** | **When filing a runtime bug, trace the implementation.** Read the source of the function you're calling. Documentation lags behind code. A 5-minute source trace would have prevented a bogus issue. |
+
+---
+
+## 6. Issue 2 (`2-fastapi-r2-streaming`) — Fixed by Runtime SDK 1.1.1
+
+| Field | Value |
+|-------|-------|
+| **issue** | `2-fastapi-r2-streaming` |
+| **category** | upstream_fixed, regression_test |
+| **severity** | high |
+| **date_discovered** | 2026-02-26 |
+| **date_resolved** | 2026-05-01 |
+| **original_behavior** | `StreamingResponse` async generators returned only the first R2 `ReadableStream` chunk, truncating responses larger than ~4 KB. |
+| **fixed_behavior** | With `workers-runtime-sdk>=1.1.1`, the ASGI adapter consumes all yielded chunks and returns the full response body. |
+| **upstream_fix** | [adewale/python-workers-issues#1](https://github.com/adewale/python-workers-issues/pull/1) adds `workers-runtime-sdk>=1.1.1` as a runtime dependency for the reproduction. |
+| **confirmation** | After applying the dependency update, `test_2_fastapi_r2_streaming` changed from `xfailed` (`4096` bytes returned instead of `131072`) to `passed`. The overall local result changed from `3 skipped, 2 xfailed` to `1 passed, 3 skipped, 1 xfailed`. |
+| **resolution** | Root README moved Issue 2 from active issues to resolved issues. The issue README now documents the fix and keeps the reproduction as a regression test. |
+| **takeaway** | **Keep fixed upstream bugs as regression tests when they are cheap to run.** The xfail-on-reproduction pattern naturally flips to a normal pass when the platform fix lands, making the test suite a living changelog. |
