@@ -1,0 +1,17 @@
+[project]
+name = "python-sync-http-libraries"
+version = "0.1.0"
+description = "Python Workers verification: synchronous HTTP libraries work inside async handlers"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32.5",
+    "urllib3>=2.0.0",
+    "webtypy>=0.1.7",
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+]

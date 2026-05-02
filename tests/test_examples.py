@@ -62,6 +62,23 @@ def test_3_httpx_headers(dev_server):
     assert httpx_headers.get("User-Agent") == "repro/1.0"
 
 
+def test_5_sync_http_libraries(dev_server):
+    port = dev_server
+    response = requests.get(f"http://localhost:{port}/test")
+    assert response.status_code == 200
+    result = response.json()
+
+    expected_headers = result["headers_sent"]
+    results = result["results"]
+
+    for client_name in ("requests", "urllib3"):
+        client_result = results[client_name]
+        assert client_result["status_code"] == 200
+        received = client_result["received"]
+        assert received.get("User-Agent") == expected_headers["User-Agent"]
+        assert received.get("X-Custom") == expected_headers["X-Custom"]
+
+
 def test_4a_streaming_truncation(deployed_url):
     """Bug 1: ASGI adapter truncates StreamingResponse to first chunk."""
     base = deployed_url

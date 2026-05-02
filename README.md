@@ -18,6 +18,10 @@ Self-contained reproductions of [Python Workers](https://developers.cloudflare.c
 
 - [**`2-fastapi-r2-streaming/`**](2-fastapi-r2-streaming) — Fixed by adding `workers-runtime-sdk>=1.1.1`. The Workers ASGI adapter now consumes all chunks from `StreamingResponse` async generators instead of truncating R2 content after the first chunk.
 
+## Verified Behaviors
+
+- [**`5-sync-http-libraries/`**](5-sync-http-libraries) — `requests` and `urllib3` can make synchronous outbound HTTP requests from Python Workers handlers.
+
 ## Open Beta and Limits
 
 - Python Workers are in open beta. You can use packages in your Workers by using the [pywrangler](https://github.com/cloudflare/workers-py?tab=readme-ov-file#pywrangler) tool.
