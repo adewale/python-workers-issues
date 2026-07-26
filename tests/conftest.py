@@ -1,14 +1,14 @@
 import json
 import os
 import re
-import subprocess
-import time
 import socket
+import subprocess
 import sys
-import pytest
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
-from contextlib import contextmanager
+import pytest
 
 REPO_ROOT = Path(__file__).parents[1]
 
@@ -127,6 +127,7 @@ def _deploy_worker(directory: str) -> str:
         ["uv", "run", "pywrangler", "deploy"],
         cwd=REPO_ROOT / directory,
         capture_output=True,
+        check=False,
         text=True,
         timeout=300,
     )
