@@ -94,3 +94,29 @@ Structured post-audit findings from this repository. Each entry is a single wide
 | **confirmation** | After applying the dependency update, `test_2_fastapi_r2_streaming` changed from `xfailed` (`4096` bytes returned instead of `131072`) to `passed`. The overall local result changed from `3 skipped, 2 xfailed` to `1 passed, 3 skipped, 1 xfailed`. |
 | **resolution** | Root README moved Issue 2 from active issues to resolved issues. The issue README now documents the fix and keeps the reproduction as a regression test. |
 | **takeaway** | **Keep fixed upstream bugs as regression tests when they are cheap to run.** The xfail-on-reproduction pattern naturally flips to a normal pass when the platform fix lands, making the test suite a living changelog. |
+
+---
+
+## 7. General — An Imperative `pytest.xfail()` Is Silent in Both Directions
+
+| Field | Value |
+|-------|-------|
+| **category** | test_design |
+| **severity** | high |
+| **date_discovered** | 2026-09-27 |
+| **observation** | Tests called `pytest.xfail()` inside the test body when the bug reproduced, and passed when it did not. After issue 2 was resolved its test still carried the `xfail` branch, so reverting the fix (dropping `workers-runtime-sdk>=1.1.1`) reported `XFAIL` and the run stayed green. For active issue 3, simulating the upstream fix made the test pass, also green, so nothing prompted moving the README entry. |
+| **resolution** | Resolved issues have no xfail: a regression fails the run. Active issues use `@pytest.mark.xfail(strict=True, raises=PlatformBugReproduced)`: the bug reproducing is `XFAIL`, the bug disappearing is `XPASS(strict)` (a failure), and any other error (server start, precondition assertions) is a normal failure instead of a silent xfail. |
+| **takeaway** | **A known-bug test must go red when its expectation stops holding, in either direction.** This supersedes the "naturally flips to a normal pass" note in entry 6. |
+
+---
+
+## 8. General — Startup Budgets Must Not Depend on Test Order
+
+| Field | Value |
+|-------|-------|
+| **category** | flaky_infrastructure |
+| **severity** | medium |
+| **date_discovered** | 2026-09-27 |
+| **observation** | Only `2-fastapi-r2-streaming` got the 300 s CI startup budget; every other directory got 30 s. A cold directory must create its virtualenvs, vendor packages, and fetch wrangler via `npx` before `Ready on`: 28-30 s with warm caches, about 55 s with a cold npm cache. A cold `-k test_3` run failed with `Server failed to start within 30 seconds`. |
+| **resolution** | One budget for every directory (`PYWRANGLER_DEV_TIMEOUT`, default 300 s under `CI`), CI warms every directory in its install step, and the server output is drained on a thread so a silent hang still hits the deadline and an early exit fails immediately. |
+| **takeaway** | **Pay install costs before the timed wait, and give every fixture the same budget.** A timeout tuned to whichever test runs first turns cache warmth into test flakiness. |

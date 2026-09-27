@@ -4,6 +4,27 @@ import requests
 EXPECTED_128KB = 131072
 
 
+class PlatformBugReproduced(Exception):
+    """Raised by a repro test when it observes the known platform bug.
+
+    Tests for active issues are marked ``xfail(strict=True,
+    raises=PlatformBugReproduced)``. That makes the outcome loud in both
+    directions:
+
+    - the bug reproduces -> xfailed (CONFIRMED in the Results summary);
+    - the bug no longer reproduces -> XPASS(strict), which fails the run, the
+      signal to move the issue to "Resolved Issues" and drop the marker;
+    - anything else goes wrong (server, precondition assertions) -> a normal
+      failure, never a silent xfail.
+
+    Tests for resolved issues have no marker, so a regression fails hard.
+    """
+
+
+def active_issue(reason):
+    return pytest.mark.xfail(strict=True, raises=PlatformBugReproduced, reason=reason)
+
+
 def test_2_fastapi_r2_streaming(dev_server):
     port = dev_server
 
@@ -24,20 +45,20 @@ def test_2_fastapi_r2_streaming(dev_server):
     assert compare["full_body_size"] == EXPECTED_128KB
     assert compare["chunk_count"] > 1
 
-    # StreamingResponse path — should return all data, but platform bug
-    # causes it to return only the first chunk.
+    # StreamingResponse path — resolved upstream by workers-runtime-sdk>=1.1.1.
+    # This is now a regression test: truncation must fail the run.
     stream_resp = requests.get(f"http://localhost:{port}/stream/test-file")
     assert stream_resp.status_code == 200
     streamed_size = len(stream_resp.content)
-
-    if streamed_size < EXPECTED_128KB:
-        pytest.xfail(
-            f"Platform bug confirmed: StreamingResponse returned {streamed_size} bytes, "
-            f"expected {EXPECTED_128KB}. ASGI adapter truncates to first chunk."
-        )
-    assert streamed_size == EXPECTED_128KB
+    assert streamed_size == EXPECTED_128KB, (
+        f"Regression of resolved issue 2: StreamingResponse returned {streamed_size} "
+        f"bytes, expected {EXPECTED_128KB} (ASGI adapter truncated to the first chunk)."
+    )
 
 
+@active_issue(
+    "Issue 3: pywrangler-bundled httpx strips User-Agent (jsfetch.py HEADERS_TO_IGNORE)"
+)
 def test_3_httpx_headers(dev_server):
     port = dev_server
     response = requests.get(f"http://localhost:{port}/test")
@@ -55,7 +76,7 @@ def test_3_httpx_headers(dev_server):
     assert httpx_headers.get("X-Custom") == "preserved"
 
     if "User-Agent" not in httpx_headers:
-        pytest.xfail(
+        raise PlatformBugReproduced(
             "Platform bug confirmed: httpx User-Agent header was stripped by "
             "jsfetch.py HEADERS_TO_IGNORE."
         )
@@ -79,6 +100,9 @@ def test_5_sync_http_libraries(dev_server):
         assert received.get("X-Custom") == expected_headers["X-Custom"]
 
 
+@active_issue(
+    "Issue 4, bug 1: ASGI adapter truncates StreamingResponse to the first chunk"
+)
 def test_4a_streaming_truncation(deployed_url):
     """Bug 1: ASGI adapter truncates StreamingResponse to first chunk."""
     base = deployed_url
@@ -130,7 +154,7 @@ def test_4a_streaming_truncation(deployed_url):
         print("  chunk from the async generator and dropped the rest.")
         print("  StreamingResponse is broken for any file that spans")
         print("  multiple R2 chunks (~4KB each).")
-        pytest.xfail(
+        raise PlatformBugReproduced(
             f"Bug 1: StreamingResponse returned {streamed_size} bytes, "
             f"expected {expected_bytes}. ASGI adapter truncates async "
             f"generators to the first yielded chunk."
@@ -140,13 +164,17 @@ def test_4a_streaming_truncation(deployed_url):
     assert streamed_size == expected_bytes
 
 
+@active_issue(
+    "Issue 4, bug 2: Wasm memory exhausted by FFI round-trip of large R2 objects"
+)
 def test_4b_memory_crash_probe(deployed_url):
     """Bug 2: Find the Wasm memory crash threshold for this Worker.
 
     Seeds and round-trips in separate requests (fresh isolate per step)
-    at escalating sizes.  A minimal Worker (FastAPI only) may not crash
-    even at 100MB.  A production Worker with many packages crashes at
-    ~42MB.
+    at escalating sizes.  A production Worker with many packages crashes at
+    ~42MB; this repro Worker has crashed at 50MB.  If it survives every
+    step up to 100MB the run fails (XPASS strict): check whether the
+    platform changed before moving issue 4 to Resolved Issues.
     """
     base = deployed_url
     step_mb = 10
@@ -167,9 +195,7 @@ def test_4b_memory_crash_probe(deployed_url):
 
         # Seed in its own request
         print(f"\n  {size_mb}MB: seeding...", end="", flush=True)
-        seed_resp = requests.post(
-            f"{base}/probe/seed/{size_mb}", timeout=60
-        )
+        seed_resp = requests.post(f"{base}/probe/seed/{size_mb}", timeout=60)
         if seed_resp.status_code >= 500:
             print(f" CRASHED (HTTP {seed_resp.status_code})")
             crash_at = size_mb
@@ -181,9 +207,7 @@ def test_4b_memory_crash_probe(deployed_url):
 
         # Round-trip in its own request (fresh isolate)
         try:
-            rt_resp = requests.get(
-                f"{base}/probe/roundtrip/{size_mb}", timeout=60
-            )
+            rt_resp = requests.get(f"{base}/probe/roundtrip/{size_mb}", timeout=60)
         except requests.exceptions.ConnectionError:
             print(" CRASHED (connection reset)")
             crash_at = size_mb
@@ -210,7 +234,7 @@ def test_4b_memory_crash_probe(deployed_url):
         print(f"  At {crash_at}MB, Wasm linear memory cannot hold 3 copies")
         print(f"  ({crash_at * 3}MB total: R2 buffer + Python bytes + JS Response).")
         print("  Workers with more packages crash at lower sizes.")
-        pytest.xfail(
+        raise PlatformBugReproduced(
             f"Bug 2: FFI round-trip crashed at {crash_at}MB "
             f"(last success: {last_ok}MB). Wasm memory exhausted by "
             f"3x copies of R2 data crossing the FFI boundary."
@@ -251,12 +275,15 @@ def test_4c_diagnostics(deployed_url):
     print(f"  Chunk count:     {diag['chunk_count']}")
     print(f"  Chunk sizes:     {diag['chunk_sizes']}")
     print("\n  What each endpoint would return:")
-    print(f"    /streaming/       {diag['streaming_would_return']:,} bytes"
-          f"  (first chunk only — Bug 1)")
-    print(f"    /asgi-full-body/  {diag['full_body_would_return']:,} bytes"
-          f"  (all chunks joined)")
-    print(f"    /fixed/           {diag['fixed_would_return']:,} bytes"
-          f"  (JS bypass)")
+    print(
+        f"    /streaming/       {diag['streaming_would_return']:,} bytes"
+        f"  (first chunk only — Bug 1)"
+    )
+    print(
+        f"    /asgi-full-body/  {diag['full_body_would_return']:,} bytes"
+        f"  (all chunks joined)"
+    )
+    print(f"    /fixed/           {diag['fixed_would_return']:,} bytes  (JS bypass)")
     print("\n  FFI boundary crossings:")
     for path, desc in diag["ffi_crossings"].items():
         print(f"    {path}: {desc}")

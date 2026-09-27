@@ -228,7 +228,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.3.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "requests", specifier = ">=2.32.5" },
-    { name = "ruff", specifier = ">=0.12.10" },
+    { name = "ruff", specifier = "==0.15.2" },
 ]
 
 [[package]]

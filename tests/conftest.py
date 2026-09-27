@@ -1,7 +1,9 @@
 import json
 import os
+import queue
 import re
 import subprocess
+import threading
 import time
 import socket
 import sys
@@ -11,6 +13,17 @@ from pathlib import Path
 from contextlib import contextmanager
 
 REPO_ROOT = Path(__file__).parents[1]
+
+# Seconds to wait for `pywrangler dev` to print "Ready on". The same budget applies
+# to every repro directory. Cold starts vendor packages and fetch wrangler via npx,
+# so CI (which pre-warms each directory in its install step) keeps the 300 s budget
+# it has always given the first directory. Override with PYWRANGLER_DEV_TIMEOUT.
+DEFAULT_DEV_TIMEOUT = 300 if "CI" in os.environ else 30
+
+
+def dev_server_timeout() -> float:
+    value = os.environ.get("PYWRANGLER_DEV_TIMEOUT")
+    return float(value) if value else float(DEFAULT_DEV_TIMEOUT)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -29,7 +42,13 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         terminalreporter.line(f"  PASSED     {name}")
     for report in failed:
         name = report.nodeid.split("::")[-1]
-        terminalreporter.line(f"  FAILED     {name}")
+        if "XPASS(strict)" in str(report.longrepr):
+            terminalreporter.line(
+                f"  NOT REPRODUCED  {name}: the platform bug may be fixed upstream; "
+                "move it to Resolved Issues and remove its xfail marker"
+            )
+        else:
+            terminalreporter.line(f"  FAILED     {name}")
 
 
 def pytest_addoption(parser):
@@ -69,27 +88,44 @@ def pywrangler_dev_server(directory: str):
         text=True,
     )
 
-    # Wait for server to be ready
+    # Drain the server's output on a thread for its whole lifetime, so a silent hang
+    # still hits the timeout and a chatty server never blocks on a full pipe.
+    lines: queue.Queue = queue.Queue()
+
+    def _pump():
+        for line in process.stdout:
+            lines.put(line)
+        lines.put(None)
+
+    threading.Thread(target=_pump, daemon=True).start()
+
+    timeout = dev_server_timeout()
+    deadline = time.monotonic() + timeout
     ready = False
-    timeout = 30
-    if "CI" in os.environ and directory.startswith("2-"):
-        # Starting the server the first time takes a really long time in CI.
-        timeout = 300
-
-    start_time = time.time()
-
-    while not ready and time.time() - start_time < timeout:
-        line = process.stdout.readline()
-        if line:
-            print(line.rstrip(), file=sys.stdout)  # Also print to stdout
-            if "[wrangler:info] Ready on" in line:
-                ready = True
-                break
-        time.sleep(0.1)
+    while not ready:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            line = lines.get(timeout=remaining)
+        except queue.Empty:
+            break
+        if line is None:
+            process.wait()
+            raise RuntimeError(
+                f"pywrangler dev in {directory} exited with code "
+                f"{process.returncode} before it was ready"
+            )
+        print(line.rstrip(), file=sys.stdout)  # Also print to stdout
+        if "[wrangler:info] Ready on" in line:
+            ready = True
 
     if not ready:
         process.terminate()
-        raise RuntimeError(f"Server failed to start within {timeout} seconds")
+        raise RuntimeError(
+            f"Server in {directory} failed to start within {timeout:g} seconds "
+            "(set PYWRANGLER_DEV_TIMEOUT to change the budget)"
+        )
 
     try:
         yield port
@@ -104,9 +140,9 @@ def pywrangler_dev_server(directory: str):
 @pytest.fixture
 def dev_server(request):
     """Fixture that starts a dev server for the appropriate directory based on test name."""
-    if request.node.get_closest_marker("skip") or request.node.get_closest_marker(
-        "xfail"
-    ):
+    # Only an explicit skip avoids starting the server. Active-issue tests are
+    # marked xfail(strict=True) and must still run against a real server.
+    if request.node.get_closest_marker("skip"):
         yield
         return
 
