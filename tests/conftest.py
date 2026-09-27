@@ -2,6 +2,7 @@ import json
 import os
 import queue
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -80,12 +81,16 @@ def pywrangler_dev_server(directory: str):
     """Context manager to start and stop pywrangler dev server."""
     port = find_free_port()
 
+    # `uv run pywrangler dev` forks npx -> wrangler -> workerd. Start it in its own
+    # process group so teardown can stop the whole tree; terminating only `uv`
+    # leaves wrangler and workerd running after the test session ends.
     process = subprocess.Popen(
         ["uv", "run", "pywrangler", "dev", "--port", str(port)],
         cwd=REPO_ROOT / directory,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,
     )
 
     # Drain the server's output on a thread for its whole lifetime, so a silent hang
@@ -111,6 +116,7 @@ def pywrangler_dev_server(directory: str):
         except queue.Empty:
             break
         if line is None:
+            _stop_process_group(process)
             process.wait()
             raise RuntimeError(
                 f"pywrangler dev in {directory} exited with code "
@@ -121,7 +127,7 @@ def pywrangler_dev_server(directory: str):
             ready = True
 
     if not ready:
-        process.terminate()
+        _stop_process_group(process)
         raise RuntimeError(
             f"Server in {directory} failed to start within {timeout:g} seconds "
             "(set PYWRANGLER_DEV_TIMEOUT to change the budget)"
@@ -130,11 +136,28 @@ def pywrangler_dev_server(directory: str):
     try:
         yield port
     finally:
-        process.terminate()
+        _stop_process_group(process)
+
+
+def _stop_process_group(process: subprocess.Popen) -> None:
+    """Stop the dev server and every process it spawned (npx, wrangler, workerd)."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        process.poll()  # reap the group leader so it stops counting as a member
         try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
+            os.killpg(process.pid, 0)  # raises once no process in the group remains
+        except ProcessLookupError:
+            return
+        time.sleep(0.2)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
 
 
 @pytest.fixture
