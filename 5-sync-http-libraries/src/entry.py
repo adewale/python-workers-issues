@@ -24,13 +24,28 @@ HEADERS = {
 
 
 def _echo_url(request_url):
+    """Return the echo URL: httpbin.org, or a loopback ``?echo=`` override.
+
+    The override is rebuilt from its parsed host, port and path, so a URL that
+    urllib.parse and requests/urllib3 would read differently (userinfo,
+    backslashes) cannot reach another host.
+    """
     override = parse_qs(urlsplit(request_url).query).get("echo")
     if not override:
         return ECHO_URL
-    parts = urlsplit(override[0])
-    if parts.scheme != "http" or parts.hostname not in LOOPBACK_HOSTS:
-        raise ValueError(f"echo URL must be http on loopback, got {override[0]!r}")
-    return override[0]
+    raw = override[0]
+    parts = urlsplit(raw)
+    if (
+        parts.scheme != "http"
+        or parts.hostname not in LOOPBACK_HOSTS
+        or "@" in parts.netloc
+        or "\\" in raw
+        or parts.query
+        or parts.fragment
+    ):
+        raise ValueError("echo URL must be http://127.0.0.1:<port>/<path>")
+    port = f":{parts.port}" if parts.port else ""
+    return f"http://{parts.hostname}{port}{parts.path}"
 
 
 def _pick_sent_headers(received):
@@ -41,7 +56,11 @@ def _pick_sent_headers(received):
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         if "/test" in request.url:
-            return self._test(_echo_url(request.url))
+            try:
+                echo_url = _echo_url(request.url)
+            except ValueError as error:
+                return Response(f"{error}\n", status=400)
+            return self._test(echo_url)
         return Response(
             "GET /test — verify requests and urllib3 work in Python Workers\n",
             headers={"content-type": "text/plain"},

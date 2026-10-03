@@ -97,6 +97,22 @@ def test_5_sync_http_libraries(dev_server, echo):
         assert received.get("User-Agent") == "sync-repro/1.0"
         assert received.get("X-Custom") == "preserved"
 
+    # Default path: both libraries reach a real HTTPS host (httpbin.org).
+    live = requests.get(f"http://localhost:{port}/test", timeout=60)
+    assert live.status_code == 200
+    for client_name in ("requests", "urllib3"):
+        received = live.json()["results"][client_name]["received"]
+        assert received.get("User-Agent") == "sync-repro/1.0"
+        assert received.get("X-Custom") == "preserved"
+
+    # The echo override only reaches loopback, even when urllib.parse and
+    # requests/urllib3 would disagree about the host.
+    bypass = requests.get(
+        f"http://localhost:{port}/test",
+        params={"echo": "http://evil.example\\@127.0.0.1/headers"},
+    )
+    assert bypass.status_code == 400
+
 
 def test_4a_streaming_truncation(deployed_url):
     """Bug 1: ASGI adapter truncates StreamingResponse to first chunk."""
