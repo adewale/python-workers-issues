@@ -49,8 +49,10 @@ async def seed_data(req: Request):
     r2 = env.BUCKET
 
     # Create 128KB of test data — large enough to span many ReadableStream
-    # chunks (each chunk is typically ~4KB from R2).
-    data = bytes(range(256)) * 512  # 128KB repeating pattern
+    # chunks (each chunk is typically ~4KB from R2). Big-endian uint32 word i
+    # holds i, so no two chunks are alike: a reordered, repeated or dropped
+    # chunk changes the bytes, not just the length.
+    data = b"".join(i.to_bytes(4, "big") for i in range(32 * 1024))
 
     # Use the .slice() fix from example 16 to write correctly.
     js_view = to_js(data)

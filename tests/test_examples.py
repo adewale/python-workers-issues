@@ -1,5 +1,6 @@
 import pytest
 import requests
+from echo_server import echo_server
 
 EXPECTED_128KB = 131072
 
@@ -16,6 +17,12 @@ def test_2_fastapi_r2_streaming(dev_server):
     read_resp = requests.get(f"http://localhost:{port}/read/test-file")
     assert read_resp.status_code == 200
     assert len(read_resp.content) == EXPECTED_128KB
+    # POST /seed stores 32768 big-endian uint32 words where word i holds i.
+    # A reordered, repeated or zeroed chunk keeps the length, not the words.
+    body = read_resp.content
+    words = [int.from_bytes(body[i : i + 4], "big") for i in range(0, len(body), 4)]
+    misplaced = next((i for i, word in enumerate(words) if word != i), None)
+    assert misplaced is None, f"word {misplaced} holds {words[misplaced]}"
 
     # Compare endpoint — validates we can read all chunks
     compare_resp = requests.get(f"http://localhost:{port}/compare/test-file")
@@ -62,21 +69,33 @@ def test_3_httpx_headers(dev_server):
     assert httpx_headers.get("User-Agent") == "repro/1.0"
 
 
-def test_5_sync_http_libraries(dev_server):
+@pytest.fixture
+def echo():
+    with echo_server() as server:
+        yield server
+
+
+def test_5_sync_http_libraries(dev_server, echo):
     port = dev_server
-    response = requests.get(f"http://localhost:{port}/test")
+    echo_url, wire = echo
+    response = requests.get(f"http://localhost:{port}/test", params={"echo": echo_url})
     assert response.status_code == 200
-    result = response.json()
+    results = response.json()["results"]
 
-    expected_headers = result["headers_sent"]
-    results = result["results"]
+    # The echo server's own record is the oracle: each library made exactly
+    # one request, and both custom headers arrived on the wire.
+    assert sorted(r["query"]["client"][0] for r in wire) == ["requests", "urllib3"]
+    for request in wire:
+        assert request["headers"].get("User-Agent") == "sync-repro/1.0"
+        assert request["headers"].get("X-Custom") == "preserved"
 
+    # The Worker read each library's response body back correctly.
     for client_name in ("requests", "urllib3"):
         client_result = results[client_name]
         assert client_result["status_code"] == 200
         received = client_result["received"]
-        assert received.get("User-Agent") == expected_headers["User-Agent"]
-        assert received.get("X-Custom") == expected_headers["X-Custom"]
+        assert received.get("User-Agent") == "sync-repro/1.0"
+        assert received.get("X-Custom") == "preserved"
 
 
 def test_4a_streaming_truncation(deployed_url):
