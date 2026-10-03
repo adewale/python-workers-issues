@@ -92,7 +92,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi" },
+    { name = "fastapi", specifier = "<0.142" },
     { name = "webtypy", specifier = ">=0.1.7" },
     { name = "workers-runtime-sdk", specifier = ">=1.1.1" },
 ]
