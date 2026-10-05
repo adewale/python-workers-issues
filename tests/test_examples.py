@@ -61,6 +61,12 @@ def test_2_fastapi_r2_streaming(dev_server):
         f"Regression of resolved issue 2: StreamingResponse returned {streamed_size} "
         f"bytes, expected {EXPECTED_128KB} (ASGI adapter truncated to the first chunk)."
     )
+    words = [
+        int.from_bytes(stream_resp.content[i : i + 4], "big")
+        for i in range(0, len(stream_resp.content), 4)
+    ]
+    misplaced = next((i for i, word in enumerate(words) if word != i), None)
+    assert misplaced is None, f"stream word {misplaced} holds {words[misplaced]}"
 
 
 @active_issue(
