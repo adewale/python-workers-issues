@@ -7,11 +7,10 @@ requires-python = ">=3.12"
 dependencies = [
     "requests>=2.32.5",
     "urllib3>=2.0.0",
-    "webtypy>=0.1.7",
 ]
 
 [dependency-groups]
 dev = [
-    "workers-py",
+    "workers-py==1.17.7",
     "workers-runtime-sdk",
 ]

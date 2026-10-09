@@ -38,11 +38,16 @@ def test_2_fastapi_r2_streaming(dev_server):
     assert streamed_size == EXPECTED_128KB
 
 
-def test_3_httpx_headers(dev_server):
+def test_3_httpx_headers(dev_server, header_echo_server):
     port = dev_server
     response = requests.get(f"http://localhost:{port}/test")
     assert response.status_code == 200
     result = response.json()
+    assert len(header_echo_server["received"]) == 2
+    assert all(
+        headers.get("X-Custom") == "preserved"
+        for headers in header_echo_server["received"]
+    )
 
     # js.fetch() should always preserve both headers — validates our code
     jsfetch_headers = result["jsfetch_received"]
@@ -62,11 +67,12 @@ def test_3_httpx_headers(dev_server):
     assert httpx_headers.get("User-Agent") == "repro/1.0"
 
 
-def test_5_sync_http_libraries(dev_server):
+def test_5_sync_http_libraries(dev_server, header_echo_server):
     port = dev_server
     response = requests.get(f"http://localhost:{port}/test")
     assert response.status_code == 200
     result = response.json()
+    assert len(header_echo_server["received"]) == 2
 
     expected_headers = result["headers_sent"]
     results = result["results"]
@@ -77,6 +83,11 @@ def test_5_sync_http_libraries(dev_server):
         received = client_result["received"]
         assert received.get("User-Agent") == expected_headers["User-Agent"]
         assert received.get("X-Custom") == expected_headers["X-Custom"]
+    assert all(
+        headers.get("User-Agent") == expected_headers["User-Agent"]
+        and headers.get("X-Custom") == expected_headers["X-Custom"]
+        for headers in header_echo_server["received"]
+    )
 
 
 def test_4a_streaming_truncation(deployed_url):

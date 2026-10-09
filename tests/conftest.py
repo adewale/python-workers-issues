@@ -1,12 +1,15 @@
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 
 import pytest
 
@@ -56,17 +59,60 @@ def find_free_port():
     return port
 
 
+@pytest.fixture
+def header_echo_server():
+    """Echo real HTTP headers locally so CI does not depend on httpbin uptime."""
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            headers = {key.title(): value for key, value in self.headers.items()}
+            received.append(headers)
+            body = json.dumps({"headers": headers}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield {
+                "url": f"http://127.0.0.1:{server.server_port}/headers",
+                "received": received,
+            }
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+
+def _signal_server(process, sig):
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
 @contextmanager
-def pywrangler_dev_server(directory: str):
+def pywrangler_dev_server(directory: str, echo_url: str | None = None):
     """Context manager to start and stop pywrangler dev server."""
     port = find_free_port()
 
+    command = ["uv", "run", "pywrangler", "dev", "--port", str(port)]
+    if echo_url:
+        command.extend(["--var", f"ECHO_URL:{echo_url}"])
     process = subprocess.Popen(
-        ["uv", "run", "pywrangler", "dev", "--port", str(port)],
+        command,
         cwd=REPO_ROOT / directory,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,
     )
 
     # Wait for server to be ready
@@ -80,6 +126,8 @@ def pywrangler_dev_server(directory: str):
 
     while not ready and time.time() - start_time < timeout:
         line = process.stdout.readline()
+        if not line and process.poll() is not None:
+            break
         if line:
             print(line.rstrip(), file=sys.stdout)  # Also print to stdout
             if "[wrangler:info] Ready on" in line:
@@ -88,21 +136,22 @@ def pywrangler_dev_server(directory: str):
         time.sleep(0.1)
 
     if not ready:
-        process.terminate()
+        _signal_server(process, signal.SIGTERM)
         raise RuntimeError(f"Server failed to start within {timeout} seconds")
 
     try:
         yield port
     finally:
-        process.terminate()
+        _signal_server(process, signal.SIGTERM)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            process.kill()
+            _signal_server(process, signal.SIGKILL)
+            process.wait()
 
 
 @pytest.fixture
-def dev_server(request):
+def dev_server(request, header_echo_server):
     """Fixture that starts a dev server for the appropriate directory based on test name."""
     if request.node.get_closest_marker("skip") or request.node.get_closest_marker(
         "xfail"
@@ -114,7 +163,12 @@ def dev_server(request):
     # Extract directory name from test name (e.g., "test_1_r2_binary" -> "1-r2-binary")
     dir_name = test_name.replace("test_", "").replace("_", "-")
 
-    with pywrangler_dev_server(dir_name) as port:
+    echo_url = (
+        header_echo_server["url"]
+        if dir_name in {"3-httpx-headers", "5-sync-http-libraries"}
+        else None
+    )
+    with pywrangler_dev_server(dir_name, echo_url) as port:
         yield port
 
 

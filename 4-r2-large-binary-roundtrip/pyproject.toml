@@ -5,12 +5,11 @@ description = "Reproduction: large R2 binary round-trip through Python crashes W
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "webtypy>=0.1.7",
     "fastapi",
 ]
 
 [dependency-groups]
 dev = [
-    "workers-py",
+    "workers-py==1.17.7",
     "workers-runtime-sdk"
 ]

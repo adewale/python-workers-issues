@@ -13,6 +13,10 @@ Older guidance said libraries like `requests` and `urllib3` failed in Python Wor
 
 Both calls run directly inside the Worker's request handler. The response includes the status code and the headers httpbin observed.
 
+The `ECHO_URL` Worker variable can override the default header echo URL.
+CI supplies a local HTTP echo server and verifies the requests received there,
+so an httpbin.org outage cannot break these integration tests.
+
 ## Run
 
 ```bash
