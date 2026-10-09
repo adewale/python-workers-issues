@@ -24,19 +24,19 @@ def _pick_sent_headers(received):
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         if "/test" in request.url:
-            return self._test()
+            return self._test(getattr(self.env, "ECHO_URL", ECHO_URL))
         return Response(
             "GET /test — verify requests and urllib3 work in Python Workers\n",
             headers={"content-type": "text/plain"},
         )
 
-    def _test(self):
+    def _test(self, echo_url):
         import requests
         import urllib3
 
         results = {}
 
-        requests_resp = requests.get(ECHO_URL, headers=HEADERS, timeout=10)
+        requests_resp = requests.get(echo_url, headers=HEADERS, timeout=10)
         requests_resp.raise_for_status()
         results["requests"] = {
             "status_code": requests_resp.status_code,
@@ -46,7 +46,7 @@ class Default(WorkerEntrypoint):
         http = urllib3.PoolManager()
         urllib3_resp = http.request(
             "GET",
-            ECHO_URL,
+            echo_url,
             headers=HEADERS,
             timeout=urllib3.Timeout(connect=10.0, read=10.0),
         )

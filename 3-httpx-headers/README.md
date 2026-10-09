@@ -32,6 +32,11 @@ uv run pywrangler dev
 
 The `/test` endpoint sends `{"User-Agent": "repro/1.0", "X-Custom": "preserved"}` to httpbin.org/headers (which echoes back received headers) via both httpx and `js.fetch()`.
 
+Set an `ECHO_URL` Worker variable to use another HTTP header echo endpoint:
+`uv run pywrangler dev --var ECHO_URL:http://127.0.0.1:8000/headers`.
+The test suite supplies a local echo server and verifies that both clients
+actually reach it, so CI does not depend on httpbin.org availability.
+
 ### Actual output
 
 ```json

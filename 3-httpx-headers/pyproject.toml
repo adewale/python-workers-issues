@@ -6,11 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.0",
-    "webtypy>=0.1.7",
 ]
 
 [dependency-groups]
 dev = [
-    "workers-py",
+    "workers-py==1.17.7",
     "workers-runtime-sdk"
 ]
