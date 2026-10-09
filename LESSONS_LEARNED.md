@@ -94,3 +94,40 @@ Structured post-audit findings from this repository. Each entry is a single wide
 | **confirmation** | After applying the dependency update, `test_2_fastapi_r2_streaming` changed from `xfailed` (`4096` bytes returned instead of `131072`) to `passed`. The overall local result changed from `3 skipped, 2 xfailed` to `1 passed, 3 skipped, 1 xfailed`. |
 | **resolution** | Root README moved Issue 2 from active issues to resolved issues. The issue README now documents the fix and keeps the reproduction as a regression test. |
 | **takeaway** | **Keep fixed upstream bugs as regression tests when they are cheap to run.** The xfail-on-reproduction pattern naturally flips to a normal pass when the platform fix lands, making the test suite a living changelog. |
+
+---
+
+## 7. CI Reliability — Control the Echo Service, Keep Real HTTP
+
+| Field | Value |
+|-------|-------|
+| **category** | test_infrastructure, external_dependency |
+| **date_resolved** | 2026-10-09 |
+| **affected_examples** | `3-httpx-headers`, `5-sync-http-libraries` |
+| **observed_failure** | The tests depended on httpbin.org availability. Upstream HTTP failures broke the examples independently of the Ruff upgrade and could obscure the intended header behavior. |
+| **resolution** | Keep httpbin as the interactive default, but accept an `ECHO_URL` Worker variable. CI supplies a real loopback HTTP server that echoes and records received headers. Check upstream HTTP errors explicitly. |
+| **regression_coverage** | Both clients in each example must reach the echo server. Assertions check actual received headers, not only the Worker's reported JSON. Issue 3's local-request and control-path assertions run before its known-bug xfail. |
+| **evidence** | [PR #2](https://github.com/adewale/python-workers-issues/pull/2); merged revision [`17e2a28`](https://github.com/adewale/python-workers-issues/commit/17e2a28d4ac2d5439aaf8470866c5e7a94ededf0); [test and fixture diff](https://github.com/adewale/python-workers-issues/pull/2/files). |
+| **confirmed_platform_behavior** | httpx still strips `User-Agent`; `js.fetch()` preserves it. The expected failure describes that reproduced behavior, not an echo-service outage. Both `requests` and `urllib3` preserve the tested headers. |
+| **takeaway** | **Control external availability without mocking away the protocol.** Use real HTTP against a controlled service, assert that traffic reaches it, and validate setup before classifying a failure as an expected platform bug. |
+
+---
+
+## 8. Runtime Drift — Import Timing, Tool Versions, and Honest Coverage
+
+| Field | Value |
+|-------|-------|
+| **category** | runtime_compatibility, verification_process |
+| **date_resolved** | 2026-10-09 |
+| **observed_failure** | The previous Workers/dependency environment failed during setup. With the updated toolchain, FastAPI telemetry initialization needed entropy unavailable during Worker startup. These failures were not explained by Ruff's code changes. |
+| **resolution** | Remove typing-only `webtypy` from runtime dependencies; pin `workers-py` 1.17.7 and CI's uv 0.12.3; select Python 3.13. Move the existing FastAPI app/routes into `src/app.py` and import the app inside the request handler. Terminate the dev-server process group between tests and detect startup-process exits. |
+| **tested_environment** | Linux Docker with Python 3.13.14 and Wrangler 4.149.0 locally; clean GitHub Ubuntu PR CI with Python 3.13.15. Ruff and its pre-commit hook are aligned at 0.16.0. Wrangler and other floating layers were not all pinned by this repair. |
+| **commands** | `uv sync --dev`; `UV_PYTHON=3.13 CI=true uv run pytest -vv`; `uv run ruff check .`. |
+| **validation** | Local and PR CI: **2 passed, 3 skipped, 1 xfailed**, with Ruff passing. [PR CI](https://github.com/adewale/python-workers-issues/actions/runs/37918858835) and [post-merge CI](https://github.com/adewale/python-workers-issues/actions/runs/37919064552) succeeded. |
+| **limitations** | The three R2 deployment-only tests were skipped because no deployed Worker URL was supplied. No production deployment was performed. The httpx xfail confirms the still-reproduced header bug; it is not a fix for that platform behavior. The repair did not include a separately documented deliberate-revert negative-control run for every new assertion. |
+| **takeaway** | **Compare base and head before blaming a tooling PR; record the full tested environment and coverage boundaries.** A green local suite is not evidence for skipped deployment paths. Pinning one tool does not freeze the whole runtime. |
+
+Reusable rules are in the
+[shared engineering guidance](https://github.com/adewale/python-workers-examples/blob/main/docs/engineering-guidance.md).
+The [cross-project retrospective](https://github.com/adewale/python-workers-examples/blob/main/docs/retrospectives/2026-10-09-ruff-rollout.md)
+records the 29-PR Ruff rollout, evidence, and separate follow-ups.

@@ -2,6 +2,12 @@
 
 Self-contained reproductions of [Python Workers](https://developers.cloudflare.com/workers/languages/python) bugs. Each numbered directory is an independent project that demonstrates a specific issue and its workaround or, after an upstream fix lands, serves as a regression test.
 
+## Engineering notes
+
+- [Lessons learned](LESSONS_LEARNED.md): dated platform and CI findings.
+- [Shared engineering guidance](https://github.com/adewale/python-workers-examples/blob/main/docs/engineering-guidance.md): reusable rules shared with the examples repository.
+- [Ruff rollout retrospective](https://github.com/adewale/python-workers-examples/blob/main/docs/retrospectives/2026-10-09-ruff-rollout.md): cross-project evidence and remaining coverage gaps.
+
 ## Get started
 
 1. `git clone https://github.com/cloudflare/python-workers-issues`
