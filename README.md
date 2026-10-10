@@ -21,7 +21,8 @@ From the repo root, `uv run pytest -vv` starts `pywrangler dev` for each local r
 
 - **Active issues** are marked `xfail(strict=True)`. The expected outcome is `XFAIL` (the bug still reproduces). If the bug stops reproducing, the test reports `XPASS(strict)` and the run fails, which is the signal to move the issue to Resolved Issues and remove the marker.
 - **Resolved issues** are plain regression tests: if the bug comes back, the test fails.
-- Each `pywrangler dev` gets the same startup budget: 300 s when `CI` is set, 30 s otherwise. A cold directory has to vendor packages and fetch wrangler first, so set `PYWRANGLER_DEV_TIMEOUT=<seconds>` for a cold local run, or warm a directory with `uv run pywrangler dev --help`.
+- Each `pywrangler dev` gets 30 s to print `Ready on` (300 s for `2-fastapi-r2-streaming` when `CI` is set). CI warms every directory with `uv run pywrangler dev --help` before the tests, so the budget does not depend on test order. A cold local directory has to vendor packages and fetch wrangler first, so warm it the same way or set `PYWRANGLER_DEV_TIMEOUT=<seconds>`.
+- CI also runs `uv run ruff check .` and `SKIP=ruff uv run pre-commit run --all-files` (ruff format, codespell and file hygiene hooks) in the same job.
 
 ## Active Issues
 

@@ -16,16 +16,18 @@ import pytest
 
 REPO_ROOT = Path(__file__).parents[1]
 
-# Seconds to wait for `pywrangler dev` to print "Ready on". The same budget applies
-# to every repro directory. Cold starts vendor packages and fetch wrangler via npx,
-# so CI (which pre-warms each directory in its install step) keeps the 300 s budget
-# it has always given the first directory. Override with PYWRANGLER_DEV_TIMEOUT.
-DEFAULT_DEV_TIMEOUT = 300 if "CI" in os.environ else 30
 
-
-def dev_server_timeout() -> float:
+# Seconds to wait for `pywrangler dev` to print "Ready on": 30 s, except 300 s for
+# 2-fastapi-r2-streaming under CI, whose first start in CI takes a really long time.
+# CI warms every repro directory in its install step so the 30 s budget holds
+# whatever the test order. For a cold local run, set PYWRANGLER_DEV_TIMEOUT.
+def dev_server_timeout(directory: str) -> float:
     value = os.environ.get("PYWRANGLER_DEV_TIMEOUT")
-    return float(value) if value else float(DEFAULT_DEV_TIMEOUT)
+    if value:
+        return float(value)
+    if "CI" in os.environ and directory.startswith("2-"):
+        return 300.0
+    return 30.0
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -147,7 +149,7 @@ def pywrangler_dev_server(directory: str, echo_url: str | None = None):
 
     Thread(target=_pump, daemon=True).start()
 
-    timeout = dev_server_timeout()
+    timeout = dev_server_timeout(directory)
     deadline = time.monotonic() + timeout
     ready = False
     while not ready:
