@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import re
 import signal
 import socket
@@ -14,6 +15,19 @@ from threading import Thread
 import pytest
 
 REPO_ROOT = Path(__file__).parents[1]
+
+
+# Seconds to wait for `pywrangler dev` to print "Ready on": 30 s, except 300 s for
+# 2-fastapi-r2-streaming under CI, whose first start in CI takes a really long time.
+# CI warms every repro directory in its install step so the 30 s budget holds
+# whatever the test order. For a cold local run, set PYWRANGLER_DEV_TIMEOUT.
+def dev_server_timeout(directory: str) -> float:
+    value = os.environ.get("PYWRANGLER_DEV_TIMEOUT")
+    if value:
+        return float(value)
+    if "CI" in os.environ and directory.startswith("2-"):
+        return 300.0
+    return 30.0
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -32,7 +46,13 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         terminalreporter.line(f"  PASSED     {name}")
     for report in failed:
         name = report.nodeid.split("::")[-1]
-        terminalreporter.line(f"  FAILED     {name}")
+        if "XPASS(strict)" in str(report.longrepr):
+            terminalreporter.line(
+                f"  NOT REPRODUCED  {name}: the platform bug may be fixed upstream; "
+                "move it to Resolved Issues and remove its xfail marker"
+            )
+        else:
+            terminalreporter.line(f"  FAILED     {name}")
 
 
 def pytest_addoption(parser):
@@ -106,6 +126,9 @@ def pywrangler_dev_server(directory: str, echo_url: str | None = None):
     command = ["uv", "run", "pywrangler", "dev", "--port", str(port)]
     if echo_url:
         command.extend(["--var", f"ECHO_URL:{echo_url}"])
+    # `uv run pywrangler dev` forks npx -> wrangler -> workerd. Start it in its own
+    # process group so teardown can stop the whole tree; terminating only `uv`
+    # leaves wrangler and workerd running after the test session ends.
     process = subprocess.Popen(
         command,
         cwd=REPO_ROOT / directory,
@@ -115,29 +138,45 @@ def pywrangler_dev_server(directory: str, echo_url: str | None = None):
         start_new_session=True,
     )
 
-    # Wait for server to be ready
+    # Drain the server's output on a thread for its whole lifetime, so a silent hang
+    # still hits the timeout and a chatty server never blocks on a full pipe.
+    lines: queue.Queue = queue.Queue()
+
+    def _pump():
+        for line in process.stdout:
+            lines.put(line)
+        lines.put(None)
+
+    Thread(target=_pump, daemon=True).start()
+
+    timeout = dev_server_timeout(directory)
+    deadline = time.monotonic() + timeout
     ready = False
-    timeout = 30
-    if "CI" in os.environ and directory.startswith("2-"):
-        # Starting the server the first time takes a really long time in CI.
-        timeout = 300
-
-    start_time = time.time()
-
-    while not ready and time.time() - start_time < timeout:
-        line = process.stdout.readline()
-        if not line and process.poll() is not None:
+    while not ready:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             break
-        if line:
-            print(line.rstrip(), file=sys.stdout)  # Also print to stdout
-            if "[wrangler:info] Ready on" in line:
-                ready = True
-                break
-        time.sleep(0.1)
+        try:
+            line = lines.get(timeout=remaining)
+        except queue.Empty:
+            break
+        if line is None:
+            _signal_server(process, signal.SIGTERM)
+            process.wait()
+            raise RuntimeError(
+                f"pywrangler dev in {directory} exited with code "
+                f"{process.returncode} before it was ready"
+            )
+        print(line.rstrip(), file=sys.stdout)  # Also print to stdout
+        if "[wrangler:info] Ready on" in line:
+            ready = True
 
     if not ready:
         _signal_server(process, signal.SIGTERM)
-        raise RuntimeError(f"Server failed to start within {timeout} seconds")
+        raise RuntimeError(
+            f"Server in {directory} failed to start within {timeout:g} seconds "
+            "(set PYWRANGLER_DEV_TIMEOUT to change the budget)"
+        )
 
     try:
         yield port
@@ -153,9 +192,9 @@ def pywrangler_dev_server(directory: str, echo_url: str | None = None):
 @pytest.fixture
 def dev_server(request, header_echo_server):
     """Fixture that starts a dev server for the appropriate directory based on test name."""
-    if request.node.get_closest_marker("skip") or request.node.get_closest_marker(
-        "xfail"
-    ):
+    # Only an explicit skip avoids starting the server. Active-issue tests are
+    # marked xfail(strict=True) and must still run against a real server.
+    if request.node.get_closest_marker("skip"):
         yield
         return
 

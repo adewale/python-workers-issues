@@ -5,7 +5,10 @@ description = "Reproduction: large R2 binary round-trip through Python crashes W
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi",
+    # fastapi 0.142 imports opentelemetry-api, which calls uuid4() at import time.
+    # Python Workers forbid randomness during startup, and this Worker imports
+    # FastAPI at module level, so it fails to load.
+    "fastapi<0.142",
 ]
 
 [dependency-groups]

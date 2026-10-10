@@ -28,10 +28,19 @@ jobs:
     - name: Install dependencies
       run: |
         uv sync --dev
-        cd 2-fastapi-r2-streaming && uv run pywrangler dev --help
+        # Warm every repro directory (uv env, vendored Python packages, npx wrangler)
+        # so the dev-server startup budget in tests/conftest.py is not spent on installs.
+        for dir in [0-9]*-*/; do
+          (cd "$dir" && uv run pywrangler dev --help)
+        done
 
     - name: Run tests
       run: uv run pytest -vv
 
     - name: Run Ruff
       run: uv run ruff check .
+
+    # The other pre-commit hooks (ruff format, codespell, file hygiene). The `ruff`
+    # hook is skipped because the step above already runs `ruff check`.
+    - name: Run pre-commit hooks
+      run: SKIP=ruff uv run pre-commit run --all-files --show-diff-on-failure

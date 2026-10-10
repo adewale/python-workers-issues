@@ -59,8 +59,10 @@ class Default(WorkerEntrypoint):
             lower_keys = {k.lower() for k in HEADERS}
             return {k: v for k, v in received.items() if k.lower() in lower_keys}
 
-        return Response.json({
-            "headers_sent": HEADERS,
-            "httpx_received": pick(httpx_received),
-            "jsfetch_received": pick(jsfetch_received),
-        })
+        return Response.json(
+            {
+                "headers_sent": HEADERS,
+                "httpx_received": pick(httpx_received),
+                "jsfetch_received": pick(jsfetch_received),
+            }
+        )
