@@ -330,7 +330,6 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
-    { name = "webtypy" },
 ]
 
 [package.dev-dependencies]
@@ -340,14 +339,11 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = "<0.142" },
-    { name = "webtypy", specifier = ">=0.1.7" },
-]
+requires-dist = [{ name = "fastapi", specifier = "<0.142" }]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "workers-py" },
+    { name = "workers-py", specifier = "==1.17.7" },
     { name = "workers-runtime-sdk" },
 ]
 
@@ -399,17 +395,8 @@ wheels = [
 ]
 
 [[package]]
-name = "webtypy"
-version = "0.1.7"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/5e/89/c7a0311fdc73809fc2415be97767f085ff3e00c86546430034dc8465fee7/webtypy-0.1.7.tar.gz", hash = "sha256:1b7212719a949c802f3d60fac5f0d952eb503a92121409cf1ad9847d7c76a336", size = 104505, upload-time = "2023-11-21T19:23:26.342Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/61/91/c731bdaa605279e00b28bfd2bf0ae67f48061d16890fb1c026924bfbd242/webtypy-0.1.7-py3-none-any.whl", hash = "sha256:f35e6d73a4e08783e23adfac271a11cda3a2bd1105499db70e4819244efed0ae", size = 103519, upload-time = "2023-11-21T19:23:23.946Z" },
-]
-
-[[package]]
 name = "workers-py"
-version = "1.7.3"
+version = "1.17.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -420,9 +407,9 @@ dependencies = [
     { name = "rich" },
     { name = "workers-runtime-sdk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/a3/23d30a15dd1ff38aa9ff4d74ac3d7dc63ab4c856e4a5922e2ab5358408ad/workers_py-1.7.3.tar.gz", hash = "sha256:bf4935fffbd0e84de1f8d16058520cb231c8bea083fa22f3a37a3f6df2d534e3", size = 48155, upload-time = "2026-02-09T06:36:04.79Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/fc/d99e4347840561c9b462e77fa91956b3960f6f95abc188a6b9132070c817/workers_py-1.17.7.tar.gz", hash = "sha256:b937f9c8ccde216ecbb2ba96e2cc7b0dd388947b855413c9e1d8a6f84606cccc", size = 74386, upload-time = "2026-10-06T04:01:18.502Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/57/77ad00e8ba5c37cd216e49b5d1f4f11eaf8de7a5f07ab8b411f75e96b8d8/workers_py-1.7.3-py3-none-any.whl", hash = "sha256:f5a6b4d4a1edae17f508c7e5db499862b39c7d2360f136013b246acaa0a73737", size = 13352, upload-time = "2026-02-09T06:36:03.579Z" },
+    { url = "https://files.pythonhosted.org/packages/27/e3/7d98af900d3db0f53befe3acf9c40badc237a5e4447ebce3f8570206e25a/workers_py-1.17.7-py3-none-any.whl", hash = "sha256:4bb9253798f7098fb5dc68f5d5f6ccaa267d1a205bc323fd4ebf4d4beeb2ffb1", size = 19506, upload-time = "2026-10-06T04:01:15.16Z" },
 ]
 
 [[package]]

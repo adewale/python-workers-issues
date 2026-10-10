@@ -11,12 +11,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.13"
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Install uv
       uses: astral-sh/setup-uv@v4
+      with:
+        version: "0.12.3"
 
     - name: Set up Python
       run: uv python install 3.13
@@ -33,20 +37,10 @@ jobs:
     - name: Run tests
       run: uv run pytest -vv
 
-  lint:
-    runs-on: ubuntu-latest
+    - name: Run Ruff
+      run: uv run ruff check .
 
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-
-    - name: Set up Python
-      run: uv python install 3.13
-
-    - name: Install dependencies
-      run: uv sync --dev
-
-    - name: pre-commit (ruff, ruff format, codespell, hygiene hooks)
-      run: uv run pre-commit run --all-files --show-diff-on-failure
+    # The other pre-commit hooks (ruff format, codespell, file hygiene). The `ruff`
+    # hook is skipped because the step above already runs `ruff check`.
+    - name: Run pre-commit hooks
+      run: SKIP=ruff uv run pre-commit run --all-files --show-diff-on-failure

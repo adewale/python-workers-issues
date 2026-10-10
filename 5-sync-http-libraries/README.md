@@ -13,7 +13,9 @@ Older guidance said libraries like `requests` and `urllib3` failed in Python Wor
 
 Both calls run directly inside the Worker's request handler. The response includes the status code and the headers httpbin observed.
 
-`GET /test?echo=http://127.0.0.1:<port>/headers` sends both requests to a loopback echo server instead of httpbin.org. The override must be plain `http` on `127.0.0.1` or `localhost` with no userinfo, query or fragment; anything else gets HTTP 400. `tests/test_examples.py::test_5_sync_http_libraries` uses this with `tests/echo_server.py`, so the test asserts on the requests that actually arrived (one per library, with both headers) rather than on the Worker's own report. It also calls the default httpbin.org path once, to keep coverage of a real HTTPS host.
+The `ECHO_URL` Worker variable can override the default header echo URL.
+CI supplies a local HTTP echo server and verifies the requests received there,
+so an httpbin.org outage cannot break these integration tests.
 
 ## Run
 

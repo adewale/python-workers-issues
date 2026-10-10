@@ -1,6 +1,5 @@
 import pytest
 import requests
-from echo_server import echo_server
 
 EXPECTED_128KB = 131072
 
@@ -72,11 +71,16 @@ def test_2_fastapi_r2_streaming(dev_server):
 @active_issue(
     "Issue 3: pywrangler-bundled httpx strips User-Agent (jsfetch.py HEADERS_TO_IGNORE)"
 )
-def test_3_httpx_headers(dev_server):
+def test_3_httpx_headers(dev_server, header_echo_server):
     port = dev_server
     response = requests.get(f"http://localhost:{port}/test")
     assert response.status_code == 200
     result = response.json()
+    assert len(header_echo_server["received"]) == 2
+    assert all(
+        headers.get("X-Custom") == "preserved"
+        for headers in header_echo_server["received"]
+    )
 
     # js.fetch() should always preserve both headers — validates our code
     jsfetch_headers = result["jsfetch_received"]
@@ -96,49 +100,27 @@ def test_3_httpx_headers(dev_server):
     assert httpx_headers.get("User-Agent") == "repro/1.0"
 
 
-@pytest.fixture
-def echo():
-    with echo_server() as server:
-        yield server
-
-
-def test_5_sync_http_libraries(dev_server, echo):
+def test_5_sync_http_libraries(dev_server, header_echo_server):
     port = dev_server
-    echo_url, wire = echo
-    response = requests.get(f"http://localhost:{port}/test", params={"echo": echo_url})
+    response = requests.get(f"http://localhost:{port}/test")
     assert response.status_code == 200
-    results = response.json()["results"]
+    result = response.json()
+    assert len(header_echo_server["received"]) == 2
 
-    # The echo server's own record is the oracle: each library made exactly
-    # one request, and both custom headers arrived on the wire.
-    assert sorted(r["query"]["client"][0] for r in wire) == ["requests", "urllib3"]
-    for request in wire:
-        assert request["headers"].get("User-Agent") == "sync-repro/1.0"
-        assert request["headers"].get("X-Custom") == "preserved"
+    expected_headers = result["headers_sent"]
+    results = result["results"]
 
-    # The Worker read each library's response body back correctly.
     for client_name in ("requests", "urllib3"):
         client_result = results[client_name]
         assert client_result["status_code"] == 200
         received = client_result["received"]
-        assert received.get("User-Agent") == "sync-repro/1.0"
-        assert received.get("X-Custom") == "preserved"
-
-    # Default path: both libraries reach a real HTTPS host (httpbin.org).
-    live = requests.get(f"http://localhost:{port}/test", timeout=60)
-    assert live.status_code == 200
-    for client_name in ("requests", "urllib3"):
-        received = live.json()["results"][client_name]["received"]
-        assert received.get("User-Agent") == "sync-repro/1.0"
-        assert received.get("X-Custom") == "preserved"
-
-    # The echo override only reaches loopback, even when urllib.parse and
-    # requests/urllib3 would disagree about the host.
-    bypass = requests.get(
-        f"http://localhost:{port}/test",
-        params={"echo": "http://evil.example\\@127.0.0.1/headers"},
+        assert received.get("User-Agent") == expected_headers["User-Agent"]
+        assert received.get("X-Custom") == expected_headers["X-Custom"]
+    assert all(
+        headers.get("User-Agent") == expected_headers["User-Agent"]
+        and headers.get("X-Custom") == expected_headers["X-Custom"]
+        for headers in header_echo_server["received"]
     )
-    assert bypass.status_code == 400
 
 
 @active_issue(

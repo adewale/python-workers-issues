@@ -30,18 +30,19 @@ HEADERS = {
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         if "/test" in request.url:
-            return await self._test()
+            return await self._test(getattr(self.env, "ECHO_URL", ECHO_URL))
         return Response(
             "GET /test — prove httpx drops User-Agent but keeps other headers\n",
             headers={"content-type": "text/plain"},
         )
 
-    async def _test(self):
+    async def _test(self, echo_url):
         import httpx
 
         # httpx path — uses jsfetch.py transport in Pyodide
         async with httpx.AsyncClient() as client:
-            resp = await client.get(ECHO_URL, headers=HEADERS, timeout=10.0)
+            resp = await client.get(echo_url, headers=HEADERS, timeout=10.0)
+            resp.raise_for_status()
         httpx_received = resp.json().get("headers", {})
 
         # js.fetch() path — direct, no filtering
@@ -49,7 +50,9 @@ class Default(WorkerEntrypoint):
             {"method": "GET", "headers": HEADERS},
             dict_converter=Object.fromEntries,
         )
-        js_resp = await fetch(ECHO_URL, opts)
+        js_resp = await fetch(echo_url, opts)
+        if not js_resp.ok:
+            raise RuntimeError(f"Header echo returned HTTP {js_resp.status}")
         jsfetch_received = json.loads(await js_resp.text()).get("headers", {})
 
         def pick(received):

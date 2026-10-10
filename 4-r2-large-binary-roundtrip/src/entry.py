@@ -156,7 +156,7 @@ async def asgi_full_body(key: str, req: Request):
     if obj is None:
         return Response(content="Not found", status_code=404)
 
-    parts, chunk_sizes = await _read_all_chunks(obj.body)
+    parts, _chunk_sizes = await _read_all_chunks(obj.body)
     full_body = b"".join(parts)
 
     diag = {

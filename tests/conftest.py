@@ -3,15 +3,16 @@ import os
 import queue
 import re
 import signal
-import subprocess
-import threading
-import time
 import socket
+import subprocess
 import sys
-import pytest
-from pathlib import Path
-
+import time
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from threading import Thread
+
+import pytest
 
 REPO_ROOT = Path(__file__).parents[1]
 
@@ -76,16 +77,58 @@ def find_free_port():
     return port
 
 
+@pytest.fixture
+def header_echo_server():
+    """Echo real HTTP headers locally so CI does not depend on httpbin uptime."""
+    received = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            headers = {key.title(): value for key, value in self.headers.items()}
+            received.append(headers)
+            body = json.dumps({"headers": headers}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield {
+                "url": f"http://127.0.0.1:{server.server_port}/headers",
+                "received": received,
+            }
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+
+def _signal_server(process, sig):
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
 @contextmanager
-def pywrangler_dev_server(directory: str):
+def pywrangler_dev_server(directory: str, echo_url: str | None = None):
     """Context manager to start and stop pywrangler dev server."""
     port = find_free_port()
 
+    command = ["uv", "run", "pywrangler", "dev", "--port", str(port)]
+    if echo_url:
+        command.extend(["--var", f"ECHO_URL:{echo_url}"])
     # `uv run pywrangler dev` forks npx -> wrangler -> workerd. Start it in its own
     # process group so teardown can stop the whole tree; terminating only `uv`
     # leaves wrangler and workerd running after the test session ends.
     process = subprocess.Popen(
-        ["uv", "run", "pywrangler", "dev", "--port", str(port)],
+        command,
         cwd=REPO_ROOT / directory,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -102,7 +145,7 @@ def pywrangler_dev_server(directory: str):
             lines.put(line)
         lines.put(None)
 
-    threading.Thread(target=_pump, daemon=True).start()
+    Thread(target=_pump, daemon=True).start()
 
     timeout = dev_server_timeout()
     deadline = time.monotonic() + timeout
@@ -116,7 +159,7 @@ def pywrangler_dev_server(directory: str):
         except queue.Empty:
             break
         if line is None:
-            _stop_process_group(process)
+            _signal_server(process, signal.SIGTERM)
             process.wait()
             raise RuntimeError(
                 f"pywrangler dev in {directory} exited with code "
@@ -127,7 +170,7 @@ def pywrangler_dev_server(directory: str):
             ready = True
 
     if not ready:
-        _stop_process_group(process)
+        _signal_server(process, signal.SIGTERM)
         raise RuntimeError(
             f"Server in {directory} failed to start within {timeout:g} seconds "
             "(set PYWRANGLER_DEV_TIMEOUT to change the budget)"
@@ -136,32 +179,16 @@ def pywrangler_dev_server(directory: str):
     try:
         yield port
     finally:
-        _stop_process_group(process)
-
-
-def _stop_process_group(process: subprocess.Popen) -> None:
-    """Stop the dev server and every process it spawned (npx, wrangler, workerd)."""
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        process.poll()  # reap the group leader so it stops counting as a member
+        _signal_server(process, signal.SIGTERM)
         try:
-            os.killpg(process.pid, 0)  # raises once no process in the group remains
-        except ProcessLookupError:
-            return
-        time.sleep(0.2)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    process.wait()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _signal_server(process, signal.SIGKILL)
+            process.wait()
 
 
 @pytest.fixture
-def dev_server(request):
+def dev_server(request, header_echo_server):
     """Fixture that starts a dev server for the appropriate directory based on test name."""
     # Only an explicit skip avoids starting the server. Active-issue tests are
     # marked xfail(strict=True) and must still run against a real server.
@@ -173,7 +200,12 @@ def dev_server(request):
     # Extract directory name from test name (e.g., "test_1_r2_binary" -> "1-r2-binary")
     dir_name = test_name.replace("test_", "").replace("_", "-")
 
-    with pywrangler_dev_server(dir_name) as port:
+    echo_url = (
+        header_echo_server["url"]
+        if dir_name in {"3-httpx-headers", "5-sync-http-libraries"}
+        else None
+    )
+    with pywrangler_dev_server(dir_name, echo_url) as port:
         yield port
 
 
@@ -186,6 +218,7 @@ def _deploy_worker(directory: str) -> str:
         ["uv", "run", "pywrangler", "deploy"],
         cwd=REPO_ROOT / directory,
         capture_output=True,
+        check=False,
         text=True,
         timeout=300,
     )
