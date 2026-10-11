@@ -127,6 +127,32 @@ Structured post-audit findings from this repository. Each entry is a single wide
 | **limitations** | The three R2 deployment-only tests were skipped because no deployed Worker URL was supplied. No production deployment was performed. The httpx xfail confirms the still-reproduced header bug; it is not a fix for that platform behavior. The repair did not include a separately documented deliberate-revert negative-control run for every new assertion. |
 | **takeaway** | **Compare base and head before blaming a tooling PR; record the full tested environment and coverage boundaries.** A green local suite is not evidence for skipped deployment paths. Pinning one tool does not freeze the whole runtime. |
 
+---
+
+## 9. General — An Imperative `pytest.xfail()` Is Silent in Both Directions
+
+| Field | Value |
+|-------|-------|
+| **category** | test_design |
+| **severity** | high |
+| **date_discovered** | 2026-09-27 |
+| **observation** | Tests called `pytest.xfail()` inside the test body when the bug reproduced, and passed when it did not. After issue 2 was resolved its test still carried the `xfail` branch, so reverting the fix (dropping `workers-runtime-sdk>=1.1.1`) reported `XFAIL` and the run stayed green. For active issue 3, simulating the upstream fix made the test pass, also green, so nothing prompted moving the README entry. |
+| **resolution** | Resolved issues have no xfail: a regression fails the run. Active issues use `@pytest.mark.xfail(strict=True, raises=PlatformBugReproduced)`: the bug reproducing is `XFAIL`, the bug disappearing is `XPASS(strict)` (a failure), and any other error (server start, precondition assertions) is a normal failure instead of a silent xfail. |
+| **takeaway** | **A known-bug test must go red when its expectation stops holding, in either direction.** This supersedes the "naturally flips to a normal pass" note in entry 6. |
+
+---
+
+## 10. General — Startup Budgets Must Not Depend on Test Order
+
+| Field | Value |
+|-------|-------|
+| **category** | flaky_infrastructure |
+| **severity** | medium |
+| **date_discovered** | 2026-09-27 |
+| **observation** | Only `2-fastapi-r2-streaming` got the 300 s CI startup budget; every other directory got 30 s. A cold directory must create its virtualenvs, vendor packages, and fetch wrangler via `npx` before `Ready on`: 28-30 s with warm caches, about 55 s with a cold npm cache. A cold `-k test_3` run failed with `Server failed to start within 30 seconds`. |
+| **resolution** | CI warms every directory in its install step (`uv run pywrangler dev --help`, 14-18 s each locally), after which each directory reached `Ready on` in 10-13 s, inside the unchanged 30 s budget. No budget was raised: `2-fastapi-r2-streaming` keeps its existing 300 s under `CI`, and `PYWRANGLER_DEV_TIMEOUT` overrides the budget only when set by hand for a cold local run. The server output is drained on a thread so a silent hang still hits the deadline, and an early exit fails immediately with its exit code. Teardown stops the whole process group (entry 8): terminating only `uv` had left `wrangler` and two `workerd` processes running after every test. |
+| **takeaway** | **Pay install costs before the timed wait instead of raising the timeout.** A timeout tuned to whichever test runs first turns cache warmth into test flakiness; warming first removes the order dependence without letting a hang wait longer. |
+
 Reusable rules are in the
 [shared engineering guidance](https://github.com/adewale/python-workers-examples/blob/main/docs/engineering-guidance.md).
 The [cross-project retrospective](https://github.com/adewale/python-workers-examples/blob/main/docs/retrospectives/2026-10-09-ruff-rollout.md)

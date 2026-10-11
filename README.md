@@ -15,6 +15,15 @@ Self-contained reproductions of [Python Workers](https://developers.cloudflare.c
 3. `uv run pywrangler dev`
 4. Press the `b` key to open a browser tab and make a request to the Worker
 
+## Run the tests
+
+From the repo root, `uv run pytest -vv` starts `pywrangler dev` for each local reproduction and prints a Results summary.
+
+- **Active issues** are marked `xfail(strict=True)`. The expected outcome is `XFAIL` (the bug still reproduces). If the bug stops reproducing, the test reports `XPASS(strict)` and the run fails, which is the signal to move the issue to Resolved Issues and remove the marker.
+- **Resolved issues** are plain regression tests: if the bug comes back, the test fails.
+- Each `pywrangler dev` gets 30 s to print `Ready on` (300 s for `2-fastapi-r2-streaming` when `CI` is set). CI warms every directory with `uv run pywrangler dev --help` before the tests, so the budget does not depend on test order. A cold local directory has to vendor packages and fetch wrangler first, so warm it the same way or set `PYWRANGLER_DEV_TIMEOUT=<seconds>`.
+- CI also runs `uv run ruff check .` and `SKIP=ruff uv run pre-commit run --all-files` (ruff format, codespell and file hygiene hooks) in the same job.
+
 ## Active Issues
 
 - [**`3-httpx-headers/`**](3-httpx-headers) — The pywrangler-bundled httpx replaces httpcore with a `jsfetch.py` transport that strips the `User-Agent` header to avoid browser CORS preflights. Workers aren't browsers — this causes 403s from APIs like GitHub that require `User-Agent`. **Workaround:** use `js.fetch()` directly.

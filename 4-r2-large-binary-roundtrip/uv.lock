@@ -339,7 +339,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastapi" }]
+requires-dist = [{ name = "fastapi", specifier = "<0.142" }]
 
 [package.metadata.requires-dev]
 dev = [

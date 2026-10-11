@@ -235,29 +235,29 @@ async def compare_paths(key: str, req: Request):
     total_size = sum(chunk_sizes)
     first_chunk_size = chunk_sizes[0] if chunk_sizes else 0
 
-    return JSONResponse({
-        "key": key,
-        "r2_body_size": total_size,
-        "chunk_count": len(parts),
-        "chunk_sizes": chunk_sizes,
-        "streaming_would_return": first_chunk_size,
-        "full_body_would_return": total_size,
-        "fixed_would_return": total_size,
-        "ffi_crossings": {
-            "/asgi-full-body": (
-                "JS→Python (getReader) then Python→JS (Response)"
-                " = 2 crossings"
-            ),
-            "/streaming": (
-                "JS→Python (getReader) then Python→JS (StreamingResponse)"
-                " = 2 crossings, but adapter truncates after first yield"
-            ),
-            "/fixed": (
-                "JS→JS (R2 body → Response)"
-                " = 0 crossings, data never enters Python"
-            ),
-        },
-    })
+    return JSONResponse(
+        {
+            "key": key,
+            "r2_body_size": total_size,
+            "chunk_count": len(parts),
+            "chunk_sizes": chunk_sizes,
+            "streaming_would_return": first_chunk_size,
+            "full_body_would_return": total_size,
+            "fixed_would_return": total_size,
+            "ffi_crossings": {
+                "/asgi-full-body": (
+                    "JS→Python (getReader) then Python→JS (Response) = 2 crossings"
+                ),
+                "/streaming": (
+                    "JS→Python (getReader) then Python→JS (StreamingResponse)"
+                    " = 2 crossings, but adapter truncates after first yield"
+                ),
+                "/fixed": (
+                    "JS→JS (R2 body → Response) = 0 crossings, data never enters Python"
+                ),
+            },
+        }
+    )
 
 
 # --------------------------------------------------------------------------
@@ -327,7 +327,7 @@ class Default(WorkerEntrypoint):
 
         # FIXED path: bypass Python entirely for /fixed/{key}
         if path.startswith("/fixed/"):
-            key = path[len("/fixed/"):]
+            key = path[len("/fixed/") :]
             if not key:
                 return js.Response.new("Missing key", {"status": 400})
 
@@ -337,9 +337,11 @@ class Default(WorkerEntrypoint):
 
             # Pass R2 ReadableStream directly to JS Response — data never
             # enters Python memory.
-            headers = to_js({
-                "content-type": "application/octet-stream",
-            })
+            headers = to_js(
+                {
+                    "content-type": "application/octet-stream",
+                }
+            )
             return js.Response.new(obj.body, headers=headers)
 
         # All other routes go through FastAPI (ASGI)
